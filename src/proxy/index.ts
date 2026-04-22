@@ -139,7 +139,7 @@ async function tryRefresh(
   try {
     const res = await fetch(REFRESH_URL, {
       method: "POST",
-      headers: { Cookie: `refresh_token=${refreshToken}` },
+      headers: { Cookie: `lemon_refresh_token=${refreshToken}` },
     });
 
     if (!res.ok) return null;
@@ -156,7 +156,7 @@ async function tryRefresh(
 
 function extractAccessToken(setCookieHeaders: string[]): string | null {
   for (const header of setCookieHeaders) {
-    const match = header.match(/^access_token=([^;]+)/);
+    const match = header.match(/^lemon_access_token=([^;]+)/);
     if (match) return match[1];
   }
   return null;

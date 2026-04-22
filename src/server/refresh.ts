@@ -11,7 +11,7 @@ export async function refreshTokenFromCookie(
   const res = await fetch(REFRESH_URL, {
     method: "POST",
     headers: {
-      Cookie: `refresh_token=${refreshTokenCookie}`,
+      Cookie: `lemon_refresh_token=${refreshTokenCookie}`,
     },
   });
 

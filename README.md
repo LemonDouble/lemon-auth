@@ -211,14 +211,15 @@ export const config = {
 | `publicPaths` | `string[]` | `[]` | 인증 없이 접근 가능한 경로. `*`로 끝나면 prefix 매칭 (예: `"/api/public/*"`) |
 | `clientId` | `string` | `undefined` | 설정 시 `approved_clients`에 포함 여부를 체크 |
 | `loginRedirectUrl` | `string` | `undefined` | 미인증 시 Google 로그인 후 돌아올 URL. 미설정 시 `"/"` 로 redirect |
+| `onAuthSuccess` | `(claims, request, response) => Promise<NextResponse> \| NextResponse` | `undefined` | 보호 경로에서 인증 성공 시 호출되는 콜백. DB 동기화, 헤더 주입 등 앱별 로직에 사용 |
 
 #### 동작 방식
 
 **보호 경로** (`publicPaths`에 해당하지 않는 경로):
 
-1. `access_token` 쿠키가 있고 만료까지 60초 이상 남았으면 → JWKS 검증 → 통과
+1. `access_token` 쿠키가 있고 만료까지 60초 이상 남았으면 → JWKS 검증 → `onAuthSuccess` 호출 → 통과
 2. 만료 임박이거나 검증 실패 시 `refresh_token`으로 자동 갱신 시도
-3. 갱신 성공 → 새 토큰 쿠키 설정 + 통과
+3. 갱신 성공 → 새 토큰 쿠키 설정 → `onAuthSuccess` 호출 → 통과
 4. 갱신 실패 → 로그인 페이지로 redirect
 
 **공개 경로** (`publicPaths`에 해당하는 경로):
@@ -431,6 +432,25 @@ export default createAuthProxy({
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };
+```
+
+`onAuthSuccess`를 사용하면 인증 성공 후 DB 동기화, 헤더 주입 등 앱별 로직을 끼워넣을 수 있습니다:
+
+```ts
+import { createAuthProxy } from "@lemondouble/lemon-auth/proxy";
+import { upsertUser } from "@/lib/db";
+
+export default createAuthProxy({
+  publicPaths: ["/", "/login"],
+  clientId: process.env.CLIENT_ID,
+  loginRedirectUrl: process.env.NEXT_PUBLIC_BASE_URL,
+  onAuthSuccess: async (claims, request, response) => {
+    await upsertUser(claims);
+    response.headers.set("x-user-uid", claims.sub);
+    response.headers.set("x-user-nickname", encodeURIComponent(claims.nickname));
+    return response;
+  },
+});
 ```
 
 ### 2. app/layout.tsx — AuthProvider + AutoTokenRefresh

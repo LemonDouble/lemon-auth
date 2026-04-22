@@ -18,10 +18,16 @@ export interface AuthProxyOptions {
   publicPaths?: string[];
   clientId?: string;
   loginRedirectUrl?: string;
+  onAuthSuccess?: (
+    claims: AccessTokenClaims,
+    request: NextRequest,
+    response: NextResponse
+  ) => Promise<NextResponse> | NextResponse;
 }
 
 export function createAuthProxy(options: AuthProxyOptions = {}) {
-  const { publicPaths = [], clientId, loginRedirectUrl } = options;
+  const { publicPaths = [], clientId, loginRedirectUrl, onAuthSuccess } =
+    options;
 
   return async function proxy(request: NextRequest): Promise<NextResponse> {
     const { pathname } = request.nextUrl;
@@ -39,7 +45,10 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
         if (clientId && !claims.approved_clients.includes(clientId)) {
           return redirectToLogin(request, loginRedirectUrl);
         }
-        return NextResponse.next();
+        const response = NextResponse.next();
+        return onAuthSuccess
+          ? await onAuthSuccess(claims, request, response)
+          : response;
       }
     }
 
@@ -55,7 +64,9 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
           for (const header of result.setCookieHeaders) {
             response.headers.append("Set-Cookie", header);
           }
-          return response;
+          return onAuthSuccess
+            ? await onAuthSuccess(claims, request, response)
+            : response;
         }
       }
     }

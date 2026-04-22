@@ -271,6 +271,47 @@ export function Nav() {
 }
 ```
 
+### `<AutoTokenRefresh>`
+
+PWA 환경에서 service worker 캐시로 인해 proxy가 실행되지 않는 경우를 대비합니다.
+`AuthProvider`의 `user`가 null일 때만 토큰 갱신을 시도하고, 성공하면 `router.refresh()`로 서버 컴포넌트를 다시 렌더합니다.
+
+```tsx
+// app/layout.tsx
+import { getUser } from "@lemondouble/lemon-auth/server";
+import { AuthProvider, AutoTokenRefresh } from "@lemondouble/lemon-auth/client";
+
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const user = await getUser();
+  return (
+    <html lang="ko">
+      <body>
+        <AuthProvider user={user}>
+          <AutoTokenRefresh />
+          {children}
+        </AuthProvider>
+      </body>
+    </html>
+  );
+}
+```
+
+`children`을 전달하면 갱신 실패 시 (미인증 상태일 때) fallback UI를 렌더합니다:
+
+```tsx
+<AutoTokenRefresh>
+  <p>로그인 정보를 확인하는 중...</p>
+</AutoTokenRefresh>
+```
+
+**동작 방식:**
+
+| 상황 | user | AutoTokenRefresh |
+|------|------|-----------------|
+| 정상 요청 (proxy 실행됨) | 있음 | 아무것도 안 함 (skip) |
+| PWA 캐시 히트 + 유효한 refresh_token | 없음 | 갱신 → `router.refresh()` |
+| PWA 캐시 히트 + 만료된 refresh_token | 없음 | 갱신 실패 → children 렌더 |
+
 ### `loginUrl(redirectUrl)`
 
 Google 로그인 URL을 생성합니다. `<a>` 태그나 `window.location.href`에 사용합니다.
@@ -392,18 +433,21 @@ export const config = {
 };
 ```
 
-### 2. app/layout.tsx — AuthProvider 설정
+### 2. app/layout.tsx — AuthProvider + AutoTokenRefresh
 
 ```tsx
 import { getUser } from "@lemondouble/lemon-auth/server";
-import { AuthProvider } from "@lemondouble/lemon-auth/client";
+import { AuthProvider, AutoTokenRefresh } from "@lemondouble/lemon-auth/client";
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const user = await getUser();
   return (
     <html lang="ko">
       <body>
-        <AuthProvider user={user}>{children}</AuthProvider>
+        <AuthProvider user={user}>
+          <AutoTokenRefresh />
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );

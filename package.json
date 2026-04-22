@@ -1,6 +1,6 @@
 {
   "name": "@lemondouble/lemon-auth",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Auth library for *.lemondouble.com services",
   "type": "module",
   "exports": {

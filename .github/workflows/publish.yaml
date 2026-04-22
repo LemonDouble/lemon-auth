@@ -22,4 +22,4 @@ jobs:
 
       - run: npm ci
       - run: npm run build
-      - run: npm publish --access public --no-git-checks
+      - run: npm publish --access public --provenance --no-git-checks

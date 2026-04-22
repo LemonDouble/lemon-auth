@@ -288,7 +288,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     <html lang="ko">
       <body>
         <AuthProvider user={user}>
-          <AutoTokenRefresh />
+          <AutoTokenRefresh fallback={<p>세션 복원 중...</p>}>
+            <p>로그인이 필요합니다</p>
+          </AutoTokenRefresh>
           {children}
         </AuthProvider>
       </body>
@@ -297,21 +299,19 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 }
 ```
 
-`children`을 전달하면 갱신 실패 시 (미인증 상태일 때) fallback UI를 렌더합니다:
-
-```tsx
-<AutoTokenRefresh>
-  <p>로그인 정보를 확인하는 중...</p>
-</AutoTokenRefresh>
-```
+| prop | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `fallback` | `React.ReactNode` | **필수** | 토큰 갱신 시도 중 렌더할 UI (스피너 등) |
+| `children` | `React.ReactNode` | 선택 | 갱신 실패 시 렌더할 UI (로그인 버튼 등) |
 
 **동작 방식:**
 
 | 상황 | user | AutoTokenRefresh |
 |------|------|-----------------|
 | 정상 요청 (proxy 실행됨) | 있음 | 아무것도 안 함 (skip) |
+| PWA 캐시 히트 + 갱신 시도 중 | 없음 | `fallback` 렌더 |
 | PWA 캐시 히트 + 유효한 refresh_token | 없음 | 갱신 → `router.refresh()` |
-| PWA 캐시 히트 + 만료된 refresh_token | 없음 | 갱신 실패 → children 렌더 |
+| PWA 캐시 히트 + 만료된 refresh_token | 없음 | 갱신 실패 → `children` 렌더 |
 
 ### `loginUrl(redirectUrl)`
 
@@ -465,7 +465,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     <html lang="ko">
       <body>
         <AuthProvider user={user}>
-          <AutoTokenRefresh />
+          <AutoTokenRefresh fallback={<p>세션 복원 중...</p>} />
           {children}
         </AuthProvider>
       </body>

@@ -28,8 +28,9 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "pnpm run build"
   },
+  "packageManager": "pnpm@10.25.0",
   "peerDependencies": {
     "next": ">=16.0.0",
     "react": ">=19.0.0"

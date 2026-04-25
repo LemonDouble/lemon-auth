@@ -238,7 +238,7 @@ function buildRefreshCookieHeader(
 
 function extractAccessToken(setCookieHeaders: string[]): string | null {
   for (const header of setCookieHeaders) {
-    const match = header.match(/^lemon_access_token=([^;]+)/);
+    const match = header.match(new RegExp(`^${ACCESS_TOKEN_COOKIE}=([^;]+)`));
     if (match) return match[1];
   }
   return null;

@@ -24,9 +24,13 @@ export async function logout(): Promise<void> {
 }
 
 export async function refreshToken(): Promise<boolean> {
-  const res = await fetch(REFRESH_URL, {
-    method: "POST",
-    credentials: "include",
-  });
-  return res.ok;
+  try {
+    const res = await fetch(REFRESH_URL, {
+      method: "POST",
+      credentials: "include",
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }

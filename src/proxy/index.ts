@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   ACCESS_TOKEN_COOKIE,
   REFRESH_TOKEN_COOKIE,
+  DEVICE_ID_COOKIE,
   AUTH_SERVER_URL,
   REFRESH_URL,
   JWKS_URL,
@@ -9,15 +10,35 @@ import {
 } from "../constants.js";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { AccessTokenClaims } from "../types.js";
+import { isAccessTokenClaims } from "../claims.js";
 
 const REFRESH_BUFFER_SECONDS = 60;
 
+export const DEFAULT_AUTH_BYPASS_PATHS = [
+  "/sw.js",
+  "/service-worker.js",
+  "/manifest.webmanifest",
+  "/manifest.json",
+  "/favicon.ico",
+  "/robots.txt",
+  "/sitemap.xml",
+  "/browserconfig.xml",
+  "/apple-touch-icon.png",
+  "/apple-touch-icon-*",
+  "/icon-*",
+  "/icons/*",
+];
+
 const jwks = createRemoteJWKSet(new URL(JWKS_URL));
+
+export type LoginRedirectUrl = string | ((request: NextRequest) => string);
 
 export interface AuthProxyOptions {
   publicPaths?: string[];
+  bypassPaths?: string[];
   clientId?: string;
-  loginRedirectUrl?: string;
+  loginRedirectUrl?: LoginRedirectUrl;
+  unapprovedRedirectUrl?: LoginRedirectUrl;
   onAuthSuccess?: (
     claims: AccessTokenClaims,
     request: NextRequest,
@@ -26,11 +47,25 @@ export interface AuthProxyOptions {
 }
 
 export function createAuthProxy(options: AuthProxyOptions = {}) {
-  const { publicPaths = [], clientId, loginRedirectUrl, onAuthSuccess } =
-    options;
+  const {
+    publicPaths = [],
+    bypassPaths = [],
+    clientId,
+    loginRedirectUrl,
+    unapprovedRedirectUrl,
+    onAuthSuccess,
+  } = options;
+  const effectiveBypassPaths = [
+    ...DEFAULT_AUTH_BYPASS_PATHS,
+    ...bypassPaths,
+  ];
 
   return async function proxy(request: NextRequest): Promise<NextResponse> {
     const { pathname } = request.nextUrl;
+
+    if (isPublicPath(pathname, effectiveBypassPaths)) {
+      return NextResponse.next();
+    }
 
     if (isPublicPath(pathname, publicPaths)) {
       return maybeRefreshAndContinue(request);
@@ -38,12 +73,13 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
 
     const accessToken = request.cookies.get(ACCESS_TOKEN_COOKIE)?.value;
     const refreshToken = request.cookies.get(REFRESH_TOKEN_COOKIE)?.value;
+    const deviceId = request.cookies.get(DEVICE_ID_COOKIE)?.value;
 
     if (accessToken && isTokenFresh(accessToken)) {
       const claims = await verifyToken(accessToken);
       if (claims) {
         if (clientId && !claims.approved_clients.includes(clientId)) {
-          return redirectToLogin(request, loginRedirectUrl);
+          return redirectToUnapproved(request, unapprovedRedirectUrl);
         }
         const response = NextResponse.next();
         return onAuthSuccess
@@ -53,12 +89,12 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
     }
 
     if (refreshToken) {
-      const result = await tryRefresh(refreshToken);
+      const result = await tryRefresh(refreshToken, deviceId);
       if (result) {
         const claims = await verifyToken(result.newAccessToken);
         if (claims) {
           if (clientId && !claims.approved_clients.includes(clientId)) {
-            return redirectToLogin(request, loginRedirectUrl);
+            return redirectToUnapproved(request, unapprovedRedirectUrl);
           }
           const response = NextResponse.next();
           for (const header of result.setCookieHeaders) {
@@ -80,13 +116,14 @@ async function maybeRefreshAndContinue(
 ): Promise<NextResponse> {
   const accessToken = request.cookies.get(ACCESS_TOKEN_COOKIE)?.value;
   const refreshToken = request.cookies.get(REFRESH_TOKEN_COOKIE)?.value;
+  const deviceId = request.cookies.get(DEVICE_ID_COOKIE)?.value;
 
   if (accessToken && isTokenFresh(accessToken)) {
     return NextResponse.next();
   }
 
   if (refreshToken) {
-    const result = await tryRefresh(refreshToken);
+    const result = await tryRefresh(refreshToken, deviceId);
     if (result) {
       const response = NextResponse.next();
       for (const header of result.setCookieHeaders) {
@@ -122,7 +159,7 @@ async function verifyToken(
     const { payload } = await jwtVerify(token, jwks, {
       issuer: AUTH_SERVER_URL,
     });
-    return payload as unknown as AccessTokenClaims;
+    return isAccessTokenClaims(payload) ? payload : null;
   } catch {
     return null;
   }
@@ -134,12 +171,13 @@ interface RefreshSuccess {
 }
 
 async function tryRefresh(
-  refreshToken: string
+  refreshToken: string,
+  deviceId?: string
 ): Promise<RefreshSuccess | null> {
   try {
     const res = await fetch(REFRESH_URL, {
       method: "POST",
-      headers: { Cookie: `lemon_refresh_token=${refreshToken}` },
+      headers: { Cookie: buildRefreshCookieHeader(refreshToken, deviceId) },
     });
 
     if (!res.ok) return null;
@@ -152,6 +190,17 @@ async function tryRefresh(
   } catch {
     return null;
   }
+}
+
+function buildRefreshCookieHeader(
+  refreshToken: string,
+  deviceId?: string
+): string {
+  const cookies = [`${REFRESH_TOKEN_COOKIE}=${refreshToken}`];
+  if (deviceId) {
+    cookies.push(`${DEVICE_ID_COOKIE}=${deviceId}`);
+  }
+  return cookies.join("; ");
 }
 
 function extractAccessToken(setCookieHeaders: string[]): string | null {
@@ -173,13 +222,32 @@ function isPublicPath(pathname: string, publicPaths: string[]): boolean {
 
 function redirectToLogin(
   request: NextRequest,
-  loginRedirectUrl?: string
+  loginRedirectUrl?: LoginRedirectUrl
 ): NextResponse {
-  if (loginRedirectUrl) {
-    const url = `${LOGIN_URL}?redirect_url=${encodeURIComponent(loginRedirectUrl)}`;
+  const redirectUrl = resolveLoginRedirectUrl(request, loginRedirectUrl);
+  if (redirectUrl) {
+    const url = `${LOGIN_URL}?redirect_url=${encodeURIComponent(redirectUrl)}`;
     return NextResponse.redirect(new URL(url, request.url));
   }
   return NextResponse.redirect(new URL("/", request.url));
+}
+
+function redirectToUnapproved(
+  request: NextRequest,
+  unapprovedRedirectUrl?: LoginRedirectUrl
+): NextResponse {
+  const redirectUrl = resolveLoginRedirectUrl(request, unapprovedRedirectUrl);
+  return NextResponse.redirect(new URL(redirectUrl ?? "/", request.url));
+}
+
+function resolveLoginRedirectUrl(
+  request: NextRequest,
+  loginRedirectUrl?: LoginRedirectUrl
+): string | undefined {
+  if (typeof loginRedirectUrl === "function") {
+    return loginRedirectUrl(request);
+  }
+  return loginRedirectUrl;
 }
 
 export type { AccessTokenClaims } from "../types.js";

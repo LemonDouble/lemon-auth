@@ -1,6 +1,7 @@
 import type { JWTPayload } from "jose";
 
 export interface AccessTokenClaims extends JWTPayload {
+  token_type: "access";
   sub: string;
   nickname: string;
   profile_image_url: string;
@@ -15,6 +16,11 @@ export interface LemonUser {
   role: "user" | "admin";
   approvedClients: string[];
 }
+
+export type LemonSession =
+  | { type: "none" }
+  | { type: "unapproved"; user: LemonUser }
+  | { type: "authenticated"; user: LemonUser };
 
 export interface UserProfile {
   uid: string;

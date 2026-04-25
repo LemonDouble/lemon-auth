@@ -1,6 +1,6 @@
 import { cache } from "react";
 import { redirect } from "next/navigation";
-import type { LemonUser } from "../types.js";
+import type { LemonSession, LemonUser } from "../types.js";
 import { verifyAccessToken } from "./verify.js";
 
 function claimsToUser(
@@ -21,19 +21,55 @@ export const getUser = cache(async (): Promise<LemonUser | null> => {
   return claimsToUser(claims);
 });
 
+export interface GetSessionOptions {
+  clientId?: string;
+}
+
+const getSessionByClientId = cache(
+  async (clientId?: string): Promise<LemonSession> => {
+    const user = await getUser();
+    if (!user) return { type: "none" };
+    if (clientId && !user.approvedClients.includes(clientId)) {
+      return { type: "unapproved", user };
+    }
+    return { type: "authenticated", user };
+  }
+);
+
+export async function getSession(
+  options: GetSessionOptions = {}
+): Promise<LemonSession> {
+  return getSessionByClientId(options.clientId);
+}
+
 export async function requireAuth(redirectTo = "/"): Promise<LemonUser> {
   const user = await getUser();
   if (user) return user;
   redirect(redirectTo);
 }
 
+export interface RequireClientOptions {
+  loginRedirectTo?: string;
+  unapprovedRedirectTo?: string;
+}
+
 export async function requireClient(
   clientId: string,
-  redirectTo = "/"
+  optionsOrRedirectTo: string | RequireClientOptions = "/"
 ): Promise<LemonUser> {
-  const user = await requireAuth(redirectTo);
-  if (!user.approvedClients.includes(clientId)) {
+  const options =
+    typeof optionsOrRedirectTo === "string"
+      ? { loginRedirectTo: optionsOrRedirectTo }
+      : optionsOrRedirectTo;
+  const session = await getSession({ clientId });
+  if (session.type === "none") {
+    redirect(options.loginRedirectTo ?? "/");
+  }
+  if (session.type === "unapproved") {
+    if (options.unapprovedRedirectTo) {
+      redirect(options.unapprovedRedirectTo);
+    }
     throw new Error("Client not approved");
   }
-  return user;
+  return session.user;
 }

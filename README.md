@@ -26,7 +26,7 @@ Server Components, Route Handlers, Server Actions에서 사용합니다.
 
 ### `verifyAccessToken()`
 
-쿠키에서 `access_token`을 읽어 JWKS(ES256)로 검증합니다.
+쿠키에서 `lemon_access_token`을 읽어 JWKS(ES256)로 검증합니다.
 
 ```ts
 import { verifyAccessToken } from "@lemondouble/lemon-auth/server";
@@ -39,6 +39,7 @@ const claims = await verifyAccessToken();
 
 ```ts
 interface AccessTokenClaims {
+  token_type: "access";     // access token 여부
   sub: string;              // 사용자 UUID
   nickname: string;         // 닉네임
   profile_image_url: string; // 프로필 이미지 URL
@@ -98,6 +99,34 @@ interface LemonUser {
 }
 ```
 
+### `getSession(options?)`
+
+로그인 상태와 클라이언트 승인 상태를 함께 반환합니다.
+
+```ts
+import { getSession } from "@lemondouble/lemon-auth/server";
+
+const CLIENT_ID = process.env.CLIENT_ID!;
+
+export default async function Page() {
+  const session = await getSession({ clientId: CLIENT_ID });
+
+  if (session.type === "none") return <p>로그인이 필요합니다</p>;
+  if (session.type === "unapproved") return <p>관리자 승인이 필요합니다</p>;
+
+  return <p>{session.user.nickname}님 환영합니다</p>;
+}
+```
+
+반환되는 `LemonSession`:
+
+```ts
+type LemonSession =
+  | { type: "none" }
+  | { type: "unapproved"; user: LemonUser }
+  | { type: "authenticated"; user: LemonUser };
+```
+
 ### `requireAuth(redirectTo?)`
 
 인증된 유저를 반환합니다. 미인증이면 `redirectTo`로 redirect합니다.
@@ -117,7 +146,7 @@ export default async function ProtectedPage() {
 |---------|------|--------|------|
 | `redirectTo` | `string` | `"/"` | 미인증 시 redirect 경로 |
 
-### `requireClient(clientId, redirectTo?)`
+### `requireClient(clientId, options?)`
 
 `requireAuth()` + `approved_clients` 체크. 관리자가 승인한 사용자만 접근할 수 있는 서비스에서 사용합니다.
 
@@ -127,8 +156,10 @@ import { requireClient } from "@lemondouble/lemon-auth/server";
 const CLIENT_ID = process.env.CLIENT_ID!;
 
 export default async function Page() {
-  const user = await requireClient(CLIENT_ID);
-  // approved_clients에 CLIENT_ID가 없으면 Error("Client not approved") throw
+  const user = await requireClient(CLIENT_ID, {
+    loginRedirectTo: "/",
+    unapprovedRedirectTo: "/pending-approval",
+  });
   return <p>{user.nickname}</p>;
 }
 ```
@@ -136,9 +167,10 @@ export default async function Page() {
 | 파라미터 | 타입 | 기본값 | 설명 |
 |---------|------|--------|------|
 | `clientId` | `string` | (필수) | 체크할 클라이언트 UUID |
-| `redirectTo` | `string` | `"/"` | 미인증 시 redirect 경로 |
+| `options.loginRedirectTo` | `string` | `"/"` | 미인증 시 redirect 경로 |
+| `options.unapprovedRedirectTo` | `string` | `undefined` | 로그인은 됐지만 클라이언트 미승인 시 redirect 경로. 미설정 시 `Error("Client not approved")` throw |
 
-### `refreshTokenFromCookie(refreshTokenCookie)`
+### `refreshTokenFromCookie(refreshTokenCookie, deviceIdCookie?)`
 
 서버사이드에서 토큰 갱신을 수행합니다. Route Handler 등에서 수동으로 갱신할 때 사용합니다.
 
@@ -147,10 +179,11 @@ import { refreshTokenFromCookie } from "@lemondouble/lemon-auth/server";
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
-  const refreshToken = cookieStore.get("refresh_token")?.value;
+  const refreshToken = cookieStore.get("lemon_refresh_token")?.value;
+  const deviceId = cookieStore.get("device_id")?.value;
   if (!refreshToken) return new Response(null, { status: 401 });
 
-  const result = await refreshTokenFromCookie(refreshToken);
+  const result = await refreshTokenFromCookie(refreshToken, deviceId);
   // result: { ok: boolean, setCookieHeaders: string[] }
 
   if (!result.ok) return new Response(null, { status: 401 });
@@ -176,8 +209,9 @@ import {
   LOGOUT_URL,            // "https://auth.lemondouble.com/api/token/logout"
   PROFILE_URL,           // "https://auth.lemondouble.com/api/user/me"
   PROFILE_PAGE_URL,      // "https://auth.lemondouble.com/profile"
-  ACCESS_TOKEN_COOKIE,   // "access_token"
-  REFRESH_TOKEN_COOKIE,  // "refresh_token"
+  ACCESS_TOKEN_COOKIE,   // "lemon_access_token"
+  REFRESH_TOKEN_COOKIE,  // "lemon_refresh_token"
+  DEVICE_ID_COOKIE,      // "device_id"
 } from "@lemondouble/lemon-auth/server";
 ```
 
@@ -195,12 +229,16 @@ import { createAuthProxy } from "@lemondouble/lemon-auth/proxy";
 
 export default createAuthProxy({
   publicPaths: ["/", "/about", "/api/public/*"],
+  bypassPaths: ["/workbox-*"],
   clientId: process.env.CLIENT_ID,
-  loginRedirectUrl: "https://myapp.lemondouble.com",
+  loginRedirectUrl: (request) => request.url,
+  unapprovedRedirectUrl: "/pending-approval",
 });
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|sw.js|manifest.webmanifest|favicon.ico|.*\\.(?:png|jpg|jpeg|gif|webp|svg|ico|woff|woff2|ttf|eot|otf)$).*)",
+  ],
 };
 ```
 
@@ -209,18 +247,40 @@ export const config = {
 | 옵션 | 타입 | 기본값 | 설명 |
 |------|------|--------|------|
 | `publicPaths` | `string[]` | `[]` | 인증 없이 접근 가능한 경로. `*`로 끝나면 prefix 매칭 (예: `"/api/public/*"`) |
+| `bypassPaths` | `string[]` | `[]` | proxy가 refresh도 하지 않고 바로 통과시킬 추가 경로. 기본 PWA 경로(`/sw.js`, `/manifest.webmanifest` 등)는 항상 bypass |
 | `clientId` | `string` | `undefined` | 설정 시 `approved_clients`에 포함 여부를 체크 |
-| `loginRedirectUrl` | `string` | `undefined` | 미인증 시 Google 로그인 후 돌아올 URL. 미설정 시 `"/"` 로 redirect |
+| `loginRedirectUrl` | `string \| (request: NextRequest) => string` | `undefined` | 미인증 시 Google 로그인 후 돌아올 URL. deep link 보존이 필요하면 `(request) => request.url` 사용. 미설정 시 `"/"` 로 redirect |
+| `unapprovedRedirectUrl` | `string \| (request: NextRequest) => string` | `undefined` | 로그인은 됐지만 `clientId` 미승인일 때 redirect할 URL. 미설정 시 `"/"` 로 redirect |
 | `onAuthSuccess` | `(claims, request, response) => Promise<NextResponse> \| NextResponse` | `undefined` | 보호 경로에서 인증 성공 시 호출되는 콜백. DB 동기화, 헤더 주입 등 앱별 로직에 사용 |
 
 #### 동작 방식
 
+**Bypass 경로** (기본 PWA/정적 리소스 + `bypassPaths`):
+
+1. `/sw.js`, `/manifest.webmanifest`, `/manifest.json`, `/favicon.ico` 등은 인증/갱신 없이 항상 통과
+2. 가능하면 `matcher`에서도 제외해 proxy 실행 자체를 피하는 것을 권장
+
 **보호 경로** (`publicPaths`에 해당하지 않는 경로):
 
-1. `access_token` 쿠키가 있고 만료까지 60초 이상 남았으면 → JWKS 검증 → `onAuthSuccess` 호출 → 통과
-2. 만료 임박이거나 검증 실패 시 `refresh_token`으로 자동 갱신 시도
-3. 갱신 성공 → 새 토큰 쿠키 설정 → `onAuthSuccess` 호출 → 통과
-4. 갱신 실패 → 로그인 페이지로 redirect
+1. `lemon_access_token` 쿠키가 있고 만료까지 60초 이상 남았으면 → JWKS 검증 → `onAuthSuccess` 호출 → 통과
+2. 로그인은 됐지만 `clientId` 미승인이면 `unapprovedRedirectUrl`로 redirect
+3. 만료 임박이거나 검증 실패 시 `lemon_refresh_token` + `device_id`로 자동 갱신 시도
+4. 갱신 성공 → 새 토큰 쿠키 설정 → `onAuthSuccess` 호출 → 통과
+5. 갱신 실패 → `loginRedirectUrl`을 `redirect_url`로 담아 로그인 페이지로 redirect
+
+`loginRedirectUrl`은 고정 URL 문자열과 요청별 resolver 함수를 모두 지원합니다.
+
+```ts
+createAuthProxy({
+  // 로그인 후 항상 같은 화면으로 복귀
+  loginRedirectUrl: "https://myapp.lemondouble.com/dashboard",
+});
+
+createAuthProxy({
+  // 로그인 후 사용자가 원래 요청한 path/query로 복귀
+  loginRedirectUrl: (request) => request.url,
+});
+```
 
 **공개 경로** (`publicPaths`에 해당하는 경로):
 
@@ -310,8 +370,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 |------|------|-----------------|
 | 정상 요청 (proxy 실행됨) | 있음 | 아무것도 안 함 (skip) |
 | PWA 캐시 히트 + 갱신 시도 중 | 없음 | `fallback` 렌더 |
-| PWA 캐시 히트 + 유효한 refresh_token | 없음 | 갱신 → `router.refresh()` |
-| PWA 캐시 히트 + 만료된 refresh_token | 없음 | 갱신 실패 → `children` 렌더 |
+| PWA 캐시 히트 + 유효한 `lemon_refresh_token` | 없음 | 갱신 → `router.refresh()` |
+| PWA 캐시 히트 + 만료된 `lemon_refresh_token` | 없음 | 갱신 실패 → `children` 렌더 |
 
 ### `loginUrl(redirectUrl)`
 
@@ -330,7 +390,7 @@ loginUrl("https://myapp.lemondouble.com/dashboard")
 
 ### `logout()`
 
-로그아웃을 수행합니다. refresh_token을 폐기하고 쿠키를 삭제합니다.
+로그아웃을 수행합니다. `lemon_refresh_token`을 폐기하고 쿠키를 삭제합니다.
 
 ```tsx
 "use client";

@@ -1,2 +1,4 @@
 node_modules
 dist
+.codex
+AUTH_INTEGRATION_ISSUES.md

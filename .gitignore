@@ -1,4 +1,5 @@
 node_modules
 dist
 .codex
+.playwright-mcp/
 AUTH_INTEGRATION_ISSUES.md

@@ -251,7 +251,7 @@ export const config = {
 | `apiPaths` | `string[]` | `["/api/*"]` | 보호 API 경로. 인증 실패 시 redirect 대신 JSON 응답을 반환한다. disable하려면 `[]` |
 | `clientId` | `string` | `undefined` | 설정 시 `approved_clients`에 포함 여부를 체크 |
 | `loginRedirectUrl` | `string \| (request: NextRequest) => string` | `undefined` | 미인증 시 Google 로그인 후 돌아올 URL. deep link 보존이 필요하면 `(request) => request.url` 사용. 미설정 시 `"/"` 로 redirect |
-| `unapprovedRedirectUrl` | `string \| (request: NextRequest) => string` | `undefined` | 로그인은 됐지만 `clientId` 미승인일 때 redirect할 URL. 미설정 시 `"/"` 로 redirect |
+| `unapprovedRedirectUrl` | `string \| (request: NextRequest) => string` | `undefined` | 로그인은 됐지만 `clientId` 미승인일 때 redirect할 URL. 미설정 시 auth-server `/error?code=FORBIDDEN`로 redirect (무한 loop 방지) |
 | `onAuthSuccess` | `(claims, request, response) => Promise<NextResponse> \| NextResponse` | `undefined` | 보호 경로에서 인증 성공 시 호출되는 콜백. DB 동기화, 헤더 주입 등 앱별 로직에 사용 |
 
 #### 동작 방식

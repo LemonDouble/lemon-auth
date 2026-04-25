@@ -270,7 +270,13 @@ function redirectToUnapproved(
   unapprovedRedirectUrl?: LoginRedirectUrl
 ): NextResponse {
   const redirectUrl = resolveLoginRedirectUrl(request, unapprovedRedirectUrl);
-  return NextResponse.redirect(new URL(redirectUrl ?? "/", request.url));
+  if (redirectUrl) {
+    return NextResponse.redirect(new URL(redirectUrl, request.url));
+  }
+  const errorUrl = new URL(`${AUTH_SERVER_URL}/error`);
+  errorUrl.searchParams.set("code", PROXY_AUTH_ERROR.FORBIDDEN);
+  errorUrl.searchParams.set("from", request.url);
+  return NextResponse.redirect(errorUrl);
 }
 
 function resolveLoginRedirectUrl(

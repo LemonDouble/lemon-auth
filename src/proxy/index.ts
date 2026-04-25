@@ -29,6 +29,15 @@ export const DEFAULT_AUTH_BYPASS_PATHS = [
   "/icons/*",
 ];
 
+export const DEFAULT_API_PATHS = ["/api/*"];
+
+export const PROXY_AUTH_ERROR = {
+  UNAUTHORIZED: "UNAUTHORIZED",
+  FORBIDDEN: "FORBIDDEN",
+} as const;
+export type ProxyAuthErrorCode =
+  (typeof PROXY_AUTH_ERROR)[keyof typeof PROXY_AUTH_ERROR];
+
 const jwks = createRemoteJWKSet(new URL(JWKS_URL));
 
 export type LoginRedirectUrl = string | ((request: NextRequest) => string);
@@ -36,6 +45,7 @@ export type LoginRedirectUrl = string | ((request: NextRequest) => string);
 export interface AuthProxyOptions {
   publicPaths?: string[];
   bypassPaths?: string[];
+  apiPaths?: string[];
   clientId?: string;
   loginRedirectUrl?: LoginRedirectUrl;
   unapprovedRedirectUrl?: LoginRedirectUrl;
@@ -50,6 +60,7 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
   const {
     publicPaths = [],
     bypassPaths = [],
+    apiPaths = DEFAULT_API_PATHS,
     clientId,
     loginRedirectUrl,
     unapprovedRedirectUrl,
@@ -71,6 +82,8 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
       return maybeRefreshAndContinue(request);
     }
 
+    const isApiRequest = isPublicPath(pathname, apiPaths);
+
     const accessToken = request.cookies.get(ACCESS_TOKEN_COOKIE)?.value;
     const refreshToken = request.cookies.get(REFRESH_TOKEN_COOKIE)?.value;
     const deviceId = request.cookies.get(DEVICE_ID_COOKIE)?.value;
@@ -79,7 +92,9 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
       const claims = await verifyToken(accessToken);
       if (claims) {
         if (clientId && !claims.approved_clients.includes(clientId)) {
-          return redirectToUnapproved(request, unapprovedRedirectUrl);
+          return isApiRequest
+            ? forbiddenJson()
+            : redirectToUnapproved(request, unapprovedRedirectUrl);
         }
         const response = NextResponse.next();
         return onAuthSuccess
@@ -94,7 +109,9 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
         const claims = await verifyToken(result.newAccessToken);
         if (claims) {
           if (clientId && !claims.approved_clients.includes(clientId)) {
-            return redirectToUnapproved(request, unapprovedRedirectUrl);
+            return isApiRequest
+              ? forbiddenJson()
+              : redirectToUnapproved(request, unapprovedRedirectUrl);
           }
           const response = NextResponse.next();
           for (const header of result.setCookieHeaders) {
@@ -107,8 +124,24 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
       }
     }
 
-    return redirectToLogin(request, loginRedirectUrl);
+    return isApiRequest
+      ? unauthorizedJson()
+      : redirectToLogin(request, loginRedirectUrl);
   };
+}
+
+function unauthorizedJson(): NextResponse {
+  return NextResponse.json(
+    { code: PROXY_AUTH_ERROR.UNAUTHORIZED },
+    { status: 401 }
+  );
+}
+
+function forbiddenJson(): NextResponse {
+  return NextResponse.json(
+    { code: PROXY_AUTH_ERROR.FORBIDDEN },
+    { status: 403 }
+  );
 }
 
 async function maybeRefreshAndContinue(

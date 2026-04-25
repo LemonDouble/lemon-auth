@@ -248,6 +248,7 @@ export const config = {
 |------|------|--------|------|
 | `publicPaths` | `string[]` | `[]` | 인증 없이 접근 가능한 경로. `*`로 끝나면 prefix 매칭 (예: `"/api/public/*"`) |
 | `bypassPaths` | `string[]` | `[]` | proxy가 refresh도 하지 않고 바로 통과시킬 추가 경로. 기본 PWA 경로(`/sw.js`, `/manifest.webmanifest` 등)는 항상 bypass |
+| `apiPaths` | `string[]` | `["/api/*"]` | 보호 API 경로. 인증 실패 시 redirect 대신 JSON 응답을 반환한다. disable하려면 `[]` |
 | `clientId` | `string` | `undefined` | 설정 시 `approved_clients`에 포함 여부를 체크 |
 | `loginRedirectUrl` | `string \| (request: NextRequest) => string` | `undefined` | 미인증 시 Google 로그인 후 돌아올 URL. deep link 보존이 필요하면 `(request) => request.url` 사용. 미설정 시 `"/"` 로 redirect |
 | `unapprovedRedirectUrl` | `string \| (request: NextRequest) => string` | `undefined` | 로그인은 됐지만 `clientId` 미승인일 때 redirect할 URL. 미설정 시 `"/"` 로 redirect |
@@ -286,6 +287,45 @@ createAuthProxy({
 
 1. 토큰이 만료 임박이면 백그라운드로 갱신 (실패해도 통과)
 2. 인증 여부와 무관하게 항상 통과
+
+**API 경로** (`apiPaths` 매칭, 기본 `/api/*`):
+
+보호 경로 중 `apiPaths`에 매칭되는 요청은 인증 실패 시 redirect 대신 JSON 응답을 반환합니다. fetch 호출이 OAuth HTML로 리다이렉트되어 계약이 깨지는 문제를 방지합니다.
+
+| 상황 | 응답 |
+|------|------|
+| 미인증 (access/refresh 모두 실패) | `401 { "code": "UNAUTHORIZED" }` |
+| 미승인 (`clientId` 미포함) | `403 { "code": "FORBIDDEN" }` |
+
+`PROXY_AUTH_ERROR` 상수와 `ProxyAuthErrorCode` 타입을 export합니다.
+
+```ts
+import { PROXY_AUTH_ERROR } from "@lemondouble/lemon-auth/proxy";
+import type { ProxyAuthErrorCode } from "@lemondouble/lemon-auth/proxy";
+
+const res = await fetch("/api/users");
+if (!res.ok) {
+  const data = (await res.json()) as { code: ProxyAuthErrorCode };
+  if (data.code === PROXY_AUTH_ERROR.UNAUTHORIZED) {
+    // 재로그인 유도
+  }
+  if (data.code === PROXY_AUTH_ERROR.FORBIDDEN) {
+    // "권한 없음" 표시
+  }
+}
+```
+
+`/api/*` 외의 경로(예: tRPC, GraphQL)도 JSON 응답을 받게 하려면 `apiPaths`에 추가합니다.
+
+```ts
+import { DEFAULT_API_PATHS } from "@lemondouble/lemon-auth/proxy";
+
+createAuthProxy({
+  apiPaths: [...DEFAULT_API_PATHS, "/trpc/*"],
+});
+```
+
+`apiPaths: []`로 두면 모든 보호 경로가 redirect로 동작합니다 (이전 버전 동작).
 
 ---
 

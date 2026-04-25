@@ -1,6 +1,7 @@
 import { cache } from "react";
 import { redirect } from "next/navigation";
 import type { LemonSession, LemonUser } from "../types.js";
+import { AUTH_SERVER_URL } from "../constants.js";
 import { verifyAccessToken } from "./verify.js";
 
 function claimsToUser(
@@ -66,10 +67,10 @@ export async function requireClient(
     redirect(options.loginRedirectTo ?? "/");
   }
   if (session.type === "unapproved") {
-    if (options.unapprovedRedirectTo) {
-      redirect(options.unapprovedRedirectTo);
-    }
-    throw new Error("Client not approved");
+    redirect(
+      options.unapprovedRedirectTo ??
+        `${AUTH_SERVER_URL}/error?code=FORBIDDEN`
+    );
   }
   return session.user;
 }

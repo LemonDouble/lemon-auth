@@ -168,7 +168,7 @@ export default async function Page() {
 |---------|------|--------|------|
 | `clientId` | `string` | (필수) | 체크할 클라이언트 UUID |
 | `options.loginRedirectTo` | `string` | `"/"` | 미인증 시 redirect 경로 |
-| `options.unapprovedRedirectTo` | `string` | `undefined` | 로그인은 됐지만 클라이언트 미승인 시 redirect 경로. 미설정 시 `Error("Client not approved")` throw |
+| `options.unapprovedRedirectTo` | `string` | `undefined` | 로그인은 됐지만 클라이언트 미승인 시 redirect 경로. 미설정 시 auth-server `/error?code=FORBIDDEN`로 redirect (proxy 동작과 동일) |
 
 ### `refreshTokenFromCookie(refreshTokenCookie, deviceIdCookie?)`
 

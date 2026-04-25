@@ -2,6 +2,7 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import type { LemonSession, LemonUser } from "../types.js";
 import { AUTH_SERVER_URL } from "../constants.js";
+import { isApprovedClient } from "../approval.js";
 import { verifyAccessToken } from "./verify.js";
 
 function claimsToUser(
@@ -30,7 +31,7 @@ const getSessionByClientId = cache(
   async (clientId?: string): Promise<LemonSession> => {
     const user = await getUser();
     if (!user) return { type: "none" };
-    if (clientId && !user.approvedClients.includes(clientId)) {
+    if (!isApprovedClient(user.approvedClients, clientId)) {
       return { type: "unapproved", user };
     }
     return { type: "authenticated", user };

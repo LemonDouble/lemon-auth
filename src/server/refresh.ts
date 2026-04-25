@@ -3,6 +3,7 @@ import {
   REFRESH_TOKEN_COOKIE,
   REFRESH_URL,
 } from "../constants.js";
+import { isMockAuthEnabled } from "../mock.js";
 
 export interface RefreshResult {
   ok: boolean;
@@ -13,6 +14,10 @@ export async function refreshTokenFromCookie(
   refreshTokenCookie: string,
   deviceIdCookie?: string
 ): Promise<RefreshResult> {
+  if (isMockAuthEnabled()) {
+    return { ok: true, setCookieHeaders: [] };
+  }
+
   const res = await fetch(REFRESH_URL, {
     method: "POST",
     headers: {

@@ -11,6 +11,8 @@ import {
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { AccessTokenClaims } from "../types.js";
 import { isAccessTokenClaims } from "../claims.js";
+import { isApprovedClient } from "../approval.js";
+import { getMockAccessTokenClaims } from "../mock.js";
 
 const REFRESH_BUFFER_SECONDS = 60;
 
@@ -83,6 +85,18 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
     }
 
     const isApiRequest = isPublicPath(pathname, apiPaths);
+    const mockClaims = getMockAccessTokenClaims();
+    if (mockClaims) {
+      return handleVerifiedClaims(
+        mockClaims,
+        request,
+        isApiRequest,
+        clientId,
+        unapprovedRedirectUrl,
+        onAuthSuccess,
+        NextResponse.next()
+      );
+    }
 
     const accessToken = request.cookies.get(ACCESS_TOKEN_COOKIE)?.value;
     const refreshToken = request.cookies.get(REFRESH_TOKEN_COOKIE)?.value;
@@ -91,15 +105,15 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
     if (accessToken && isTokenFresh(accessToken)) {
       const claims = await verifyToken(accessToken);
       if (claims) {
-        if (clientId && !claims.approved_clients.includes(clientId)) {
-          return isApiRequest
-            ? forbiddenJson()
-            : redirectToUnapproved(request, unapprovedRedirectUrl);
-        }
-        const response = NextResponse.next();
-        return onAuthSuccess
-          ? await onAuthSuccess(claims, request, response)
-          : response;
+        return handleVerifiedClaims(
+          claims,
+          request,
+          isApiRequest,
+          clientId,
+          unapprovedRedirectUrl,
+          onAuthSuccess,
+          NextResponse.next()
+        );
       }
     }
 
@@ -108,18 +122,19 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
       if (result) {
         const claims = await verifyToken(result.newAccessToken);
         if (claims) {
-          if (clientId && !claims.approved_clients.includes(clientId)) {
-            return isApiRequest
-              ? forbiddenJson()
-              : redirectToUnapproved(request, unapprovedRedirectUrl);
-          }
           const response = NextResponse.next();
           for (const header of result.setCookieHeaders) {
             response.headers.append("Set-Cookie", header);
           }
-          return onAuthSuccess
-            ? await onAuthSuccess(claims, request, response)
-            : response;
+          return handleVerifiedClaims(
+            claims,
+            request,
+            isApiRequest,
+            clientId,
+            unapprovedRedirectUrl,
+            onAuthSuccess,
+            response
+          );
         }
       }
     }
@@ -128,6 +143,26 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
       ? unauthorizedJson()
       : redirectToLogin(request, loginRedirectUrl);
   };
+}
+
+async function handleVerifiedClaims(
+  claims: AccessTokenClaims,
+  request: NextRequest,
+  isApiRequest: boolean,
+  clientId: string | undefined,
+  unapprovedRedirectUrl: LoginRedirectUrl | undefined,
+  onAuthSuccess: AuthProxyOptions["onAuthSuccess"],
+  response: NextResponse
+): Promise<NextResponse> {
+  if (!isApprovedClient(claims.approved_clients, clientId)) {
+    return isApiRequest
+      ? forbiddenJson()
+      : redirectToUnapproved(request, unapprovedRedirectUrl);
+  }
+
+  return onAuthSuccess
+    ? await onAuthSuccess(claims, request, response)
+    : response;
 }
 
 function unauthorizedJson(): NextResponse {

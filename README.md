@@ -10,6 +10,24 @@
 pnpm add @lemondouble/lemon-auth
 ```
 
+## 로컬 개발 Mock User
+
+로컬 개발에서 auth-server, OAuth, JWT 쿠키 없이 로그인 상태를 재현하려면 `.env.local`에 mock user를 설정합니다.
+
+```bash
+NEXT_PUBLIC_LEMON_AUTH_MOCK_USER='{"uid":"local-user","nickname":"Local User","profileImageUrl":"","role":"admin","approvedClients":["*"]}'
+```
+
+`NODE_ENV === "production"`에서는 이 값이 있어도 무시됩니다. `approvedClients`에 `"*"`를 넣으면 모든 `clientId`를 승인된 것으로 처리합니다.
+
+Mock User가 활성화되면:
+
+- `getUser()`, `getSession()`, `requireAuth()`, `requireClient()`는 mock user를 로그인 유저처럼 반환합니다.
+- `createAuthProxy()`는 mock user를 인증 성공으로 처리하고, `clientId` 승인 체크는 유지합니다.
+- `loginUrl(redirectUrl)`은 `redirectUrl`을 그대로 반환합니다.
+- `profileUrl(redirectUrl?)`은 `redirectUrl ?? "/"`를 반환합니다.
+- `refreshToken()`은 `true`, `logout()`은 no-op 후 `true`를 반환합니다.
+
 ## 엔트리포인트
 
 | 경로 | 환경 | 용도 |
@@ -426,11 +444,15 @@ loginUrl("https://myapp.lemondouble.com/dashboard")
 
 | 파라미터 | 타입 | 설명 |
 |---------|------|------|
-| `redirectUrl` | `string` | 로그인 완료 후 돌아올 URL (`https://` + `*.lemondouble.com`만 허용) |
+| `redirectUrl` | `string` | 로그인 완료 후 돌아올 절대 URL (`https://` + `lemondouble.com` 또는 `*.lemondouble.com`만 허용) |
+
+허용되지 않는 URL이면 `Error`를 throw합니다. Mock User가 활성화된 로컬 개발 환경에서는 검증하지 않고 `redirectUrl`을 그대로 반환합니다.
 
 ### `logout()`
 
 로그아웃을 수행합니다. `lemon_refresh_token`을 폐기하고 쿠키를 삭제합니다.
+서버 응답이 성공이면 `true`, 실패 응답 또는 네트워크 예외면 `false`를 반환합니다.
+반환값을 무시하고 기존처럼 `await logout()`만 호출해도 됩니다.
 
 ```tsx
 "use client";
@@ -438,7 +460,10 @@ import { logout } from "@lemondouble/lemon-auth/client";
 
 function LogoutButton() {
   const handleLogout = async () => {
-    await logout();
+    const ok = await logout();
+    if (!ok) {
+      // 필요하면 실패 안내를 표시
+    }
     window.location.href = "/";
   };
 
@@ -497,6 +522,7 @@ interface LemonUser {
 }
 
 interface AccessTokenClaims extends JWTPayload {
+  token_type: "access";
   sub: string;
   nickname: string;
   profile_image_url: string;
@@ -516,34 +542,52 @@ interface UserProfile {
 
 ## 전체 연동 예시
 
-새 Next.js 16 프로젝트에 인증을 추가하는 최소 예시입니다.
+새 Next.js 16 프로젝트에 인증을 추가하는 권장 예시입니다.
 
 ### 1. proxy.ts — 토큰 자동 갱신
 
 ```ts
-import { createAuthProxy } from "@lemondouble/lemon-auth/proxy";
+import {
+  createAuthProxy,
+  DEFAULT_API_PATHS,
+} from "@lemondouble/lemon-auth/proxy";
 
 export default createAuthProxy({
-  publicPaths: ["/", "/login"],
+  publicPaths: ["/", "/login", "/pending-approval", "/api/public/*"],
+  bypassPaths: ["/workbox-*"],
+  apiPaths: DEFAULT_API_PATHS,
   clientId: process.env.CLIENT_ID,
-  loginRedirectUrl: process.env.NEXT_PUBLIC_BASE_URL,
+  loginRedirectUrl: (request) => request.url,
+  unapprovedRedirectUrl: "/pending-approval",
 });
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|sw.js|manifest.webmanifest|favicon.ico|.*\\.(?:png|jpg|jpeg|gif|webp|svg|ico|woff|woff2|ttf|eot|otf)$).*)",
+  ],
 };
 ```
+
+`loginRedirectUrl: (request) => request.url`은 로그인 후 사용자가 원래 요청한 path/query로 돌아오게 합니다.
+`apiPaths`에 매칭되는 보호 API는 인증 실패 시 redirect 대신 `401/403` JSON 응답을 반환합니다.
+기본 PWA 파일(`/sw.js`, `/manifest.webmanifest` 등)은 항상 bypass되며, 앱에서 추가로 생성하는 workbox 파일은 `bypassPaths`에 넣을 수 있습니다.
 
 `onAuthSuccess`를 사용하면 인증 성공 후 DB 동기화, 헤더 주입 등 앱별 로직을 끼워넣을 수 있습니다:
 
 ```ts
-import { createAuthProxy } from "@lemondouble/lemon-auth/proxy";
+import {
+  createAuthProxy,
+  DEFAULT_API_PATHS,
+} from "@lemondouble/lemon-auth/proxy";
 import { upsertUser } from "@/lib/db";
 
 export default createAuthProxy({
-  publicPaths: ["/", "/login"],
+  publicPaths: ["/", "/login", "/pending-approval", "/api/public/*"],
+  bypassPaths: ["/workbox-*"],
+  apiPaths: DEFAULT_API_PATHS,
   clientId: process.env.CLIENT_ID,
-  loginRedirectUrl: process.env.NEXT_PUBLIC_BASE_URL,
+  loginRedirectUrl: (request) => request.url,
+  unapprovedRedirectUrl: "/pending-approval",
   onAuthSuccess: async (claims, request, response) => {
     await upsertUser(claims);
     response.headers.set("x-user-uid", claims.sub);
@@ -617,7 +661,12 @@ import { logout } from "@lemondouble/lemon-auth/client";
 
 export function LogoutButton() {
   return (
-    <button onClick={async () => { await logout(); window.location.href = "/"; }}>
+    <button
+      onClick={async () => {
+        await logout();
+        window.location.href = "/";
+      }}
+    >
       로그아웃
     </button>
   );

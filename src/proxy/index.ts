@@ -13,6 +13,7 @@ import type { AccessTokenClaims } from "../types.js";
 import { isAccessTokenClaims } from "../claims.js";
 import { isApprovedClient } from "../approval.js";
 import { getMockAccessTokenClaims } from "../mock.js";
+import { warnAuth, errorCode } from "../log.js";
 
 const REFRESH_BUFFER_SECONDS = 60;
 
@@ -195,6 +196,14 @@ async function maybeRefreshAndContinue(
     if (result) {
       return nextWithRefreshedCookies(request, result.setCookieHeaders);
     }
+    // 공개 경로라 요청은 그대로 통과시킨다. 다만 이 실패는 밖에서 보이지 않는다
+    // — 응답이 성공했을 때와 바이트 단위로 같기 때문이다. 유일한 증상은
+    // "로그인 상태로 보여야 할 화면이 익명으로 렌더되는 것" 이고, 그마저도
+    // 클라이언트 갱신(AutoTokenRefresh)이 있으면 가려진다. 그래서 여기서
+    // 한 줄이라도 남겨야 한다. tryRefresh 가 이미 사유를 찍었다.
+    warnAuth("refresh failed on public path, continuing anonymously", {
+      path: request.nextUrl.pathname,
+    });
   }
 
   return NextResponse.next();
@@ -266,8 +275,18 @@ async function verifyToken(
     const { payload } = await jwtVerify(token, jwks, {
       issuer: AUTH_SERVER_URL,
     });
-    return isAccessTokenClaims(payload) ? payload : null;
-  } catch {
+    if (isAccessTokenClaims(payload)) return payload;
+    // 서명은 유효한데 클레임 모양이 다르다. auth 서버와 버전이 어긋났을 때 난다.
+    warnAuth("access token claims shape mismatch");
+    return null;
+  } catch (error) {
+    // 정상 만료(ERR_JWT_EXPIRED)는 갱신으로 이어지므로 소음이다. 나머지는 남긴다.
+    // 특히 ERR_JWKS_NO_MATCHING_KEY 는 키 로테이션이나 JWKS 도달 실패라
+    // 위조 토큰과 구분되어야 한다.
+    const code = errorCode(error);
+    if (code !== "ERR_JWT_EXPIRED") {
+      warnAuth("access token verification failed", { code });
+    }
     return null;
   }
 }
@@ -287,14 +306,37 @@ async function tryRefresh(
       headers: { Cookie: buildRefreshCookieHeader(refreshToken, deviceId) },
     });
 
-    if (!res.ok) return null;
+    if (!res.ok) {
+      // 이 요청은 브라우저가 아니라 서버에서 나간다. UA 는 런타임 기본값이고
+      // cf_clearance 같은 챌린지 통과 쿠키도 없으므로, auth 서버 앞에 WAF 나
+      // 봇 방어가 있으면 origin 에 닿기 전에 잘린다. 2026-07-19 에 실제로
+      // Cloudflare Bot Fight Mode 가 403 + cf-mitigated: challenge 로 막았다.
+      // 그때 auth 서버 로그에는 아무것도 남지 않았다 — 도달을 못 했으니까.
+      // 그래서 상태 코드와 함께 edge 가 남긴 힌트를 같이 찍는다.
+      warnAuth("token refresh rejected", {
+        status: res.status,
+        server: res.headers.get("server"),
+        cfRay: res.headers.get("cf-ray"),
+        cfMitigated: res.headers.get("cf-mitigated"),
+      });
+      return null;
+    }
 
     const setCookieHeaders = res.headers.getSetCookie();
     const newAccessToken = extractAccessToken(setCookieHeaders);
-    if (!newAccessToken) return null;
+    if (!newAccessToken) {
+      // 200 인데 access token 이 없다. 쿠키 이름이 어긋났거나 중간 프록시가
+      // Set-Cookie 를 떨궜다. 값은 절대 찍지 않고 이름만 남긴다.
+      warnAuth("refresh succeeded but no access token cookie", {
+        cookieNames: setCookieHeaders.map((h) => h.split("=")[0]),
+      });
+      return null;
+    }
 
     return { newAccessToken, setCookieHeaders };
-  } catch {
+  } catch (error) {
+    // DNS · TLS · 타임아웃. auth 서버가 내려갔거나 경로가 막힌 경우다.
+    warnAuth("token refresh request failed", { code: errorCode(error) });
     return null;
   }
 }

@@ -122,10 +122,10 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
       if (result) {
         const claims = await verifyToken(result.newAccessToken);
         if (claims) {
-          const response = NextResponse.next();
-          for (const header of result.setCookieHeaders) {
-            response.headers.append("Set-Cookie", header);
-          }
+          const response = nextWithRefreshedCookies(
+            request,
+            result.setCookieHeaders
+          );
           return handleVerifiedClaims(
             claims,
             request,
@@ -193,15 +193,54 @@ async function maybeRefreshAndContinue(
   if (refreshToken) {
     const result = await tryRefresh(refreshToken, deviceId);
     if (result) {
-      const response = NextResponse.next();
-      for (const header of result.setCookieHeaders) {
-        response.headers.append("Set-Cookie", header);
-      }
-      return response;
+      return nextWithRefreshedCookies(request, result.setCookieHeaders);
     }
   }
 
   return NextResponse.next();
+}
+
+/**
+ * 갱신된 토큰을 이 요청의 cookie 헤더에도 반영한 응답을 만든다.
+ *
+ * Set-Cookie 는 브라우저에만 적용된다. 그것만 붙이면 지금 이 요청을 처리하는
+ * 서버 컴포넌트는 여전히 만료된 access token 을 읽고, 갱신에 성공했는데도
+ * 그 요청은 로그아웃으로 판정된다. access token 이 만료된 뒤 첫 요청마다
+ * 발생하며, PWA 콜드 스타트처럼 항상 만료 상태에서 시작하는 경우 매번 겪는다.
+ *
+ * Next.js 는 미들웨어가 넘긴 요청 헤더를 다운스트림에 그대로 전달하므로
+ * cookie 헤더를 새 토큰으로 바꿔 끼워 같은 요청에서 인증이 보이게 한다.
+ * (response.headers.append 는 NextResponse 의 쿠키 프록시를 우회하기 때문에
+ *  Next 의 x-middleware-set-cookie 병합 경로도 타지 않는다)
+ */
+function nextWithRefreshedCookies(
+  request: NextRequest,
+  setCookieHeaders: string[]
+): NextResponse {
+  const merged = new Map<string, string>();
+  for (const { name, value } of request.cookies.getAll()) {
+    merged.set(name, value);
+  }
+
+  // auth 서버는 도메인마다 같은 쿠키를 한 번씩 보내므로 이름 기준으로 덮어쓴다.
+  for (const header of setCookieHeaders) {
+    const pair = header.split(";")[0] ?? "";
+    const separator = pair.indexOf("=");
+    if (separator <= 0) continue;
+    merged.set(pair.slice(0, separator).trim(), pair.slice(separator + 1).trim());
+  }
+
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set(
+    "cookie",
+    Array.from(merged, ([name, value]) => `${name}=${value}`).join("; ")
+  );
+
+  const response = NextResponse.next({ request: { headers: requestHeaders } });
+  for (const header of setCookieHeaders) {
+    response.headers.append("Set-Cookie", header);
+  }
+  return response;
 }
 
 function isTokenFresh(token: string): boolean {

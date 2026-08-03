@@ -1,19 +1,10 @@
 import {
-  ACCESS_TOKEN_COOKIE,
-  DEVICE_ID_COOKIE,
   LOGIN_URL,
   LOGOUT_URL,
   PROFILE_PAGE_URL,
   REFRESH_URL,
-  REFRESH_TOKEN_COOKIE,
 } from "../constants.js";
 import { isMockAuthEnabled } from "../mock.js";
-
-const LOGOUT_COOKIE_NAMES = [
-  ACCESS_TOKEN_COOKIE,
-  REFRESH_TOKEN_COOKIE,
-  DEVICE_ID_COOKIE,
-];
 
 export function loginUrl(redirectUrl: string): string {
   if (isMockAuthEnabled()) return redirectUrl;
@@ -29,11 +20,12 @@ export function profileUrl(redirectUrl?: string): string {
   return PROFILE_PAGE_URL;
 }
 
+/**
+ * 로그아웃. 쿠키 삭제는 응답의 Set-Cookie 가 한다 — 세션 쿠키는 httpOnly
+ * 라서 JS 로는 지울 수 없다.
+ */
 export async function logout(): Promise<boolean> {
-  if (isMockAuthEnabled()) {
-    expireAuthCookies();
-    return true;
-  }
+  if (isMockAuthEnabled()) return true;
 
   try {
     const res = await fetch(LOGOUT_URL, {
@@ -43,61 +35,36 @@ export async function logout(): Promise<boolean> {
     return res.ok;
   } catch {
     return false;
-  } finally {
-    expireAuthCookies();
   }
 }
 
-export async function refreshToken(): Promise<boolean> {
-  if (isMockAuthEnabled()) return true;
+export type RefreshSessionResult = "ok" | "unauthorized" | "unavailable";
+
+/**
+ * 세션 갱신. 쿠키 반영은 응답의 Set-Cookie 가 한다.
+ *
+ * "unauthorized" 는 refresh token 이 죽은 것이고, 서버가 그 응답에서 세션
+ * 쿠키를 함께 지워준다. "unavailable" 은 서버 · 네트워크 사정이므로 세션이
+ * 죽었다고 판단하면 안 된다.
+ */
+export async function refreshSession(): Promise<RefreshSessionResult> {
+  if (isMockAuthEnabled()) return "ok";
 
   try {
     const res = await fetch(REFRESH_URL, {
       method: "POST",
       credentials: "include",
     });
-    return res.ok;
+    if (res.ok) return "ok";
+    if (res.status === 401 || res.status === 403) return "unauthorized";
+    return "unavailable";
   } catch {
-    return false;
+    return "unavailable";
   }
 }
 
-function expireAuthCookies(): void {
-  if (typeof document === "undefined") return;
-
-  for (const name of LOGOUT_COOKIE_NAMES) {
-    for (const domain of getCookieDomains()) {
-      document.cookie = [
-        `${name}=`,
-        "Max-Age=0",
-        "Path=/",
-        "SameSite=Lax",
-        domain ? `Domain=${domain}` : "",
-      ]
-        .filter(Boolean)
-        .join("; ");
-    }
-  }
-}
-
-function getCookieDomains(): string[] {
-  if (typeof window === "undefined") return [""];
-
-  const { hostname } = window.location;
-  if (!hostname || hostname === "localhost" || isIpAddress(hostname)) {
-    return [""];
-  }
-
-  const labels = hostname.split(".");
-  const domains = [""];
-  for (let i = 0; i < labels.length - 1; i += 1) {
-    domains.push(`.${labels.slice(i).join(".")}`);
-  }
-  return domains;
-}
-
-function isIpAddress(hostname: string): boolean {
-  return /^[\d.]+$/.test(hostname) || hostname.includes(":");
+export async function refreshToken(): Promise<boolean> {
+  return (await refreshSession()) === "ok";
 }
 
 function assertValidLoginRedirectUrl(redirectUrl: string): void {

@@ -1,76 +1,74 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { useAuth } from "./context.js";
-import { loginUrl, refreshToken } from "./url.js";
+import { useSearchParams } from "next/navigation";
+import { refreshSession } from "./url.js";
 
 /**
- * 토큰을 갱신하는 유일한 주체.
- *
- * 프록시는 쿠키만 읽고, access 가 만료됐는데 refresh 가 남아 있으면 이 경로로
- * 보낸다. 여기서 브라우저가 직접 갱신한 뒤 원래 가려던 곳으로 돌려보낸다.
+ * 토큰을 갱신하는 유일한 주체. 프록시가 만료된 세션을 이리로 보낸다.
  *
  * 갱신을 서버(미들웨어)가 아니라 브라우저가 하는 이유는 두 가지다.
  *
  *   1. 미들웨어는 요청마다 별도 인스턴스로 떠서 서로를 모른다. 프리페치가
  *      깔리면 같은 refresh token 으로 갱신이 동시에 나가고, 회전 경쟁이 난다.
- *      브라우저는 JS 컨텍스트가 하나라 이 문제가 없다.
+ *      브라우저의 복구 경로는 한 번에 하나만 뜬다.
  *   2. 브라우저 요청에는 진짜 UA 와 WAF 통과 쿠키가 실린다. 서버간 fetch 는
  *      UA 가 런타임 기본값이라 봇 방어에 걸릴 수 있다.
  *
- * 앱은 이 컴포넌트를 프록시의 `restorePath`(기본 `/auth/restore`)에 마운트하고,
- * 그 경로를 `publicPaths` 에 넣어야 한다. 안 그러면 프록시가 복구 경로 자신을
- * 다시 복구 경로로 보내 무한 루프가 된다.
+ * 끝나면 router 가 아니라 window.location 으로 next 에 간다. 소프트 네비는
+ * 루트 레이아웃(과 AuthProvider)을 다시 렌더하지 않으므로, 옛 세션 스냅샷이
+ * 남아 화면이 어긋나거나 라우터 캐시에 굳은 리다이렉트가 되살아난다.
+ *
+ * 실패해도 next 로 간다. 죽은 토큰이면 서버가 401 응답에서 세션 쿠키를
+ * 지워 주므로(auth-server v2026.08.03.2+), 이후 판단 — 로그인으로 보낼지,
+ * 익명으로 보여줄지 — 는 프록시와 DAL 이 알아서 한다.
  */
-export function SessionRestore({
-  fallback,
-  failedRedirectUrl,
-}: {
-  /** 갱신하는 동안 보여줄 것. */
-  fallback: React.ReactNode;
-  /** 갱신 실패 시 보낼 곳. 기본은 로그인. */
-  failedRedirectUrl?: string;
-}) {
-  const { isAuthenticated } = useAuth();
-  const router = useRouter();
+export function SessionRestore({ fallback }: { fallback: React.ReactNode }) {
   const searchParams = useSearchParams();
-  const [failed, setFailed] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
 
   useEffect(() => {
     let ignore = false;
     const next = safeNextPath(searchParams.get("next"));
 
-    // 이미 세션이 살아 있으면 갱신하지 않는다. 만료 구간에 굳은 리다이렉트를
-    // 뒤늦게 따라오는 경우가 있는데, 그때마다 토큰을 회전시키면 회전 경쟁의
-    // 빌미만 늘린다.
-    if (isAuthenticated) {
-      router.replace(next);
-      return;
-    }
-
-    refreshToken().then((ok) => {
+    refreshSession().then((result) => {
       if (ignore) return;
 
-      if (ok) {
-        router.replace(next);
+      if (result === "unavailable") {
+        // 서버 · 네트워크 사정이다. 토큰은 살아 있을 수 있으므로
+        // 로그인으로 보내지 않고 재시도만 권한다.
+        setUnavailable(true);
         return;
       }
 
-      // 갱신이 실패했으면 refresh token 이 죽은 것이다. 다시 시도해봐야
-      // 같은 결과이므로 로그인으로 보낸다. 여기서 복구 경로로 되돌리면
-      // 무한 루프가 된다.
-      setFailed(true);
-      window.location.href =
-        failedRedirectUrl ?? loginUrl(window.location.origin);
+      window.location.replace(next);
     });
 
     return () => {
       ignore = true;
     };
-  }, [isAuthenticated, router, searchParams, failedRedirectUrl]);
+  }, [searchParams]);
 
-  if (failed) return null;
+  if (unavailable) {
+    return (
+      <div
+        style={{
+          minHeight: "100dvh",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 12,
+        }}
+      >
+        <p>인증 서버에 연결하지 못했습니다.</p>
+        <button type="button" onClick={() => window.location.reload()}>
+          다시 시도
+        </button>
+      </div>
+    );
+  }
+
   return fallback;
 }
 

@@ -7,25 +7,22 @@ import {
 import { isMockAuthEnabled } from "../mock.js";
 
 /**
- * 프록시는 optimistic check 만 한다.
+ * 프록시는 라우팅 결정만 한다: 신선하면 통과, 아니면 복구 경로로.
  *
- * Next.js 공식 인증 가이드가 이렇게 못박고 있다.
+ * Next.js 공식 인증 가이드의 optimistic check 다. 프리페치를 포함한 모든
+ * 요청에서 돌기 때문에 쿠키의 exp 만 읽고, 네트워크 · DB · 서명 검증을
+ * 하지 않는다. 보안 판단은 DAL(getSession / requireAuth)이 한다.
  *
- *   since Proxy runs on every route, including prefetched routes, it's
- *   important to only read the session from the cookie (optimistic checks),
- *   and avoid database checks to prevent performance issues.
+ * 갱신 주체는 restorePath 에 마운트된 <SessionRestore /> 하나뿐이다.
+ * 공개 경로도 refresh 쿠키가 남아 있으면 복구를 거치게 해서, 만료된 세션이
+ * "로그아웃 상태로 렌더됐다가 뒤늦게 뒤집히는" 화면을 없앤다. (0.8.x 까지는
+ * 이 몫을 레이아웃의 <AutoTokenRefresh /> 가 맡았는데, 복구 경로와 갱신
+ * 주체가 둘이 되는 문제가 있었다)
  *
- * 0.7.x 까지는 여기서 auth 서버로 refresh 요청을 보냈다. 그 결과 프리페치가
- * 깔릴 때마다 갱신이 동시에 여러 번 나갔고, Vercel 미들웨어는 요청마다 별도
- * 인스턴스로 뜨므로 직렬화할 방법도 없었다. 회전 경쟁이 나서 정상 요청이
- * 탈취로 오인되고 계정 토큰이 통째로 폐기되는 일이 반복됐다.
- *
- * 그래서 갱신 주체를 브라우저 하나로 옮겼다. 브라우저는 JS 컨텍스트가 하나라
- * 자연히 직렬화된다. 프록시는 쿠키만 읽고, 갱신이 필요하면 앱이 마운트한
- * 복구 경로로 넘긴다.
- *
- * 서명 검증도 하지 않는다. optimistic check 는 보안 판단이 아니라 화면 이동
- * 판단이다. 진짜 검증은 DAL(getSession / requireApprovedUser)이 한다.
+ * 0.7.x 까지는 프록시가 직접 auth 서버로 갱신을 보냈다. 미들웨어는 요청마다
+ * 별도 인스턴스로 떠서 직렬화가 안 되므로, 프리페치가 겹치면 같은 refresh
+ * token 으로 갱신이 동시에 나가 회전 경쟁이 났고 계정 토큰이 통째로
+ * 폐기되는 일이 반복됐다. 다시 여기에 네트워크 호출을 넣지 말 것.
  */
 
 const REFRESH_BUFFER_SECONDS = 60;
@@ -60,7 +57,7 @@ export type ProxyAuthErrorCode =
 export type LoginRedirectUrl = string | ((request: NextRequest) => string);
 
 export interface AuthProxyOptions {
-  /** 로그인 없이 열어둘 경로. 여기서는 아무 판단도 하지 않고 통과시킨다. */
+  /** 로그인 없이 열어둘 경로. 익명이면 통과, 만료 세션이면 복구를 거친다. */
   publicPaths?: string[];
   /** 프록시 자체를 건너뛸 경로. 정적 파일 등. */
   bypassPaths?: string[];
@@ -84,11 +81,12 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
   return async function proxy(request: NextRequest): Promise<NextResponse> {
     const { pathname } = request.nextUrl;
 
-    if (isPublicPath(pathname, effectiveBypassPaths)) {
+    // 복구 경로 자신은 항상 통과. 여기서 복구 경로로 보내면 무한 루프다.
+    if (pathname === restorePath) {
       return NextResponse.next();
     }
 
-    if (isPublicPath(pathname, publicPaths)) {
+    if (isPublicPath(pathname, effectiveBypassPaths)) {
       return NextResponse.next();
     }
 
@@ -101,28 +99,40 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
       return NextResponse.next();
     }
 
-    const isApiRequest = isPublicPath(pathname, apiPaths);
-    if (isApiRequest) {
+    // --- 여기부터는 access token 이 없거나 만료가 임박한 요청 ---
+
+    const isPublic = isPublicPath(pathname, publicPaths);
+
+    if (isPublicPath(pathname, apiPaths)) {
       // API 는 리다이렉트를 따라가봐야 HTML 을 받을 뿐이다. 401 을 주고
       // 클라이언트가 복구하게 한다.
+      if (isPublic) {
+        return NextResponse.next();
+      }
       return NextResponse.json(
         { code: PROXY_AUTH_ERROR.UNAUTHORIZED },
         { status: 401 }
       );
     }
 
-    // access 는 없지만 refresh 가 남아 있으면 아직 로그인이 풀린 게 아니다.
-    // 브라우저가 갱신할 수 있도록 복구 경로로 보낸다.
-    //
-    // 프리페치도 똑같이 처리한다. 프리페치를 그냥 통과시키면 만료된 토큰으로
-    // 페이지가 렌더되고, 거기서 나온 redirect 가 라우터 캐시에 굳어 어느 탭을
-    // 눌러도 같은 곳으로 튀게 된다(예전에 겪은 문제다). 반면 여기서 돌려주는
-    // 리다이렉트는 굳어도 해가 없다 — 복구 경로는 막다른 길이 아니라 스스로
-    // 세션을 되살리고 next 로 되돌려 보내므로 목적지도 보존된다.
+    // 서버 액션 등 비-GET 을 리다이렉트하면 액션 프로토콜이 깨진다.
+    // 통과시키고 DAL 이 거부하게 둔다.
+    if (request.method !== "GET") {
+      return NextResponse.next();
+    }
+
+    // refresh 가 남아 있으면 아직 로그인이 풀린 게 아니다. 브라우저가
+    // 갱신할 수 있도록 복구 경로로 보낸다. 프리페치가 이 리다이렉트를
+    // 캐시에 굳혀도 해가 없다 — 복구 경로는 스스로 세션을 되살리고
+    // next 로 되돌려 보내므로 목적지가 보존된다.
     if (request.cookies.get(REFRESH_TOKEN_COOKIE)?.value) {
       const restore = new URL(restorePath, request.url);
       restore.searchParams.set("next", pathname + request.nextUrl.search);
       return NextResponse.redirect(restore);
+    }
+
+    if (isPublic) {
+      return NextResponse.next();
     }
 
     return redirectToLogin(request, loginRedirectUrl);

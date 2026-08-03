@@ -4,8 +4,6 @@ export type {
   GetSessionOptions,
   RequireClientOptions,
 } from "./user.js";
-export { refreshTokenFromCookie } from "./refresh.js";
-export type { RefreshResult } from "./refresh.js";
 
 export {
   AUTH_SERVER_URL,

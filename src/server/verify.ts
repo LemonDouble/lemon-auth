@@ -18,6 +18,9 @@ async function verify(token: string): Promise<AccessTokenClaims | null> {
   try {
     const { payload } = await jwtVerify(token, jwks, {
       issuer: AUTH_SERVER_URL,
+      // 발급자(자택 k3s)와 검증자(Vercel)의 시계가 몇 초 어긋나면, 방금
+      // 발급된 토큰이 nbf 미래로 거부되어 로그인 직후 로그아웃으로 보인다.
+      clockTolerance: 10,
     });
     if (isAccessTokenClaims(payload)) return payload;
     warnAuth("access token claims shape mismatch");

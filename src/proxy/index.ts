@@ -2,18 +2,31 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   ACCESS_TOKEN_COOKIE,
   REFRESH_TOKEN_COOKIE,
-  DEVICE_ID_COOKIE,
-  AUTH_SERVER_URL,
-  REFRESH_URL,
-  JWKS_URL,
   LOGIN_URL,
 } from "../constants.js";
-import { createRemoteJWKSet, jwtVerify } from "jose";
-import type { AccessTokenClaims } from "../types.js";
-import { isAccessTokenClaims } from "../claims.js";
-import { isApprovedClient } from "../approval.js";
-import { getMockAccessTokenClaims } from "../mock.js";
-import { warnAuth, errorCode } from "../log.js";
+import { isMockAuthEnabled } from "../mock.js";
+
+/**
+ * 프록시는 optimistic check 만 한다.
+ *
+ * Next.js 공식 인증 가이드가 이렇게 못박고 있다.
+ *
+ *   since Proxy runs on every route, including prefetched routes, it's
+ *   important to only read the session from the cookie (optimistic checks),
+ *   and avoid database checks to prevent performance issues.
+ *
+ * 0.7.x 까지는 여기서 auth 서버로 refresh 요청을 보냈다. 그 결과 프리페치가
+ * 깔릴 때마다 갱신이 동시에 여러 번 나갔고, Vercel 미들웨어는 요청마다 별도
+ * 인스턴스로 뜨므로 직렬화할 방법도 없었다. 회전 경쟁이 나서 정상 요청이
+ * 탈취로 오인되고 계정 토큰이 통째로 폐기되는 일이 반복됐다.
+ *
+ * 그래서 갱신 주체를 브라우저 하나로 옮겼다. 브라우저는 JS 컨텍스트가 하나라
+ * 자연히 직렬화된다. 프록시는 쿠키만 읽고, 갱신이 필요하면 앱이 마운트한
+ * 복구 경로로 넘긴다.
+ *
+ * 서명 검증도 하지 않는다. optimistic check 는 보안 판단이 아니라 화면 이동
+ * 판단이다. 진짜 검증은 DAL(getSession / requireApprovedUser)이 한다.
+ */
 
 const REFRESH_BUFFER_SECONDS = 60;
 
@@ -34,6 +47,9 @@ export const DEFAULT_AUTH_BYPASS_PATHS = [
 
 export const DEFAULT_API_PATHS = ["/api/*"];
 
+/** 앱이 <SessionRestore /> 를 마운트해야 하는 기본 경로. */
+export const DEFAULT_RESTORE_PATH = "/auth/restore";
+
 export const PROXY_AUTH_ERROR = {
   UNAUTHORIZED: "UNAUTHORIZED",
   FORBIDDEN: "FORBIDDEN",
@@ -41,22 +57,18 @@ export const PROXY_AUTH_ERROR = {
 export type ProxyAuthErrorCode =
   (typeof PROXY_AUTH_ERROR)[keyof typeof PROXY_AUTH_ERROR];
 
-const jwks = createRemoteJWKSet(new URL(JWKS_URL));
-
 export type LoginRedirectUrl = string | ((request: NextRequest) => string);
 
 export interface AuthProxyOptions {
+  /** 로그인 없이 열어둘 경로. 여기서는 아무 판단도 하지 않고 통과시킨다. */
   publicPaths?: string[];
+  /** 프록시 자체를 건너뛸 경로. 정적 파일 등. */
   bypassPaths?: string[];
+  /** 리다이렉트 대신 401 JSON 을 돌려줄 경로. 기본 `/api/*`. */
   apiPaths?: string[];
-  clientId?: string;
   loginRedirectUrl?: LoginRedirectUrl;
-  unapprovedRedirectUrl?: LoginRedirectUrl;
-  onAuthSuccess?: (
-    claims: AccessTokenClaims,
-    request: NextRequest,
-    response: NextResponse
-  ) => Promise<NextResponse> | NextResponse;
+  /** <SessionRestore /> 를 마운트한 경로. 기본 `/auth/restore`. */
+  restorePath?: string;
 }
 
 export function createAuthProxy(options: AuthProxyOptions = {}) {
@@ -64,15 +76,10 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
     publicPaths = [],
     bypassPaths = [],
     apiPaths = DEFAULT_API_PATHS,
-    clientId,
     loginRedirectUrl,
-    unapprovedRedirectUrl,
-    onAuthSuccess,
+    restorePath = DEFAULT_RESTORE_PATH,
   } = options;
-  const effectiveBypassPaths = [
-    ...DEFAULT_AUTH_BYPASS_PATHS,
-    ...bypassPaths,
-  ];
+  const effectiveBypassPaths = [...DEFAULT_AUTH_BYPASS_PATHS, ...bypassPaths];
 
   return async function proxy(request: NextRequest): Promise<NextResponse> {
     const { pathname } = request.nextUrl;
@@ -82,183 +89,59 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
     }
 
     if (isPublicPath(pathname, publicPaths)) {
-      return maybeRefreshAndContinue(request);
+      return NextResponse.next();
     }
 
-    const isApiRequest = isPublicPath(pathname, apiPaths);
-    const mockClaims = getMockAccessTokenClaims();
-    if (mockClaims) {
-      return handleVerifiedClaims(
-        mockClaims,
-        request,
-        isApiRequest,
-        clientId,
-        unapprovedRedirectUrl,
-        onAuthSuccess,
-        NextResponse.next()
-      );
+    if (isMockAuthEnabled()) {
+      return NextResponse.next();
     }
 
     const accessToken = request.cookies.get(ACCESS_TOKEN_COOKIE)?.value;
-    const refreshToken = request.cookies.get(REFRESH_TOKEN_COOKIE)?.value;
-    const deviceId = request.cookies.get(DEVICE_ID_COOKIE)?.value;
-
     if (accessToken && isTokenFresh(accessToken)) {
-      const claims = await verifyToken(accessToken);
-      if (claims) {
-        return handleVerifiedClaims(
-          claims,
-          request,
-          isApiRequest,
-          clientId,
-          unapprovedRedirectUrl,
-          onAuthSuccess,
-          NextResponse.next()
-        );
-      }
+      return NextResponse.next();
     }
 
-    if (refreshToken) {
-      const result = await tryRefresh(refreshToken, deviceId);
-      if (result) {
-        const claims = await verifyToken(result.newAccessToken);
-        if (claims) {
-          const response = nextWithRefreshedCookies(
-            request,
-            result.setCookieHeaders
-          );
-          return handleVerifiedClaims(
-            claims,
-            request,
-            isApiRequest,
-            clientId,
-            unapprovedRedirectUrl,
-            onAuthSuccess,
-            response
-          );
-        }
-      }
+    const isApiRequest = isPublicPath(pathname, apiPaths);
+    if (isApiRequest) {
+      // API 는 리다이렉트를 따라가봐야 HTML 을 받을 뿐이다. 401 을 주고
+      // 클라이언트가 복구하게 한다.
+      return NextResponse.json(
+        { code: PROXY_AUTH_ERROR.UNAUTHORIZED },
+        { status: 401 }
+      );
     }
 
-    return isApiRequest
-      ? unauthorizedJson()
-      : redirectToLogin(request, loginRedirectUrl);
+    // access 는 없지만 refresh 가 남아 있으면 아직 로그인이 풀린 게 아니다.
+    // 브라우저가 갱신할 수 있도록 복구 경로로 보낸다.
+    //
+    // 프리페치도 똑같이 처리한다. 프리페치를 그냥 통과시키면 만료된 토큰으로
+    // 페이지가 렌더되고, 거기서 나온 redirect 가 라우터 캐시에 굳어 어느 탭을
+    // 눌러도 같은 곳으로 튀게 된다(예전에 겪은 문제다). 반면 여기서 돌려주는
+    // 리다이렉트는 굳어도 해가 없다 — 복구 경로는 막다른 길이 아니라 스스로
+    // 세션을 되살리고 next 로 되돌려 보내므로 목적지도 보존된다.
+    if (request.cookies.get(REFRESH_TOKEN_COOKIE)?.value) {
+      const restore = new URL(restorePath, request.url);
+      restore.searchParams.set("next", pathname + request.nextUrl.search);
+      return NextResponse.redirect(restore);
+    }
+
+    return redirectToLogin(request, loginRedirectUrl);
   };
 }
 
-async function handleVerifiedClaims(
-  claims: AccessTokenClaims,
-  request: NextRequest,
-  isApiRequest: boolean,
-  clientId: string | undefined,
-  unapprovedRedirectUrl: LoginRedirectUrl | undefined,
-  onAuthSuccess: AuthProxyOptions["onAuthSuccess"],
-  response: NextResponse
-): Promise<NextResponse> {
-  if (!isApprovedClient(claims.approved_clients, clientId)) {
-    return isApiRequest
-      ? forbiddenJson()
-      : redirectToUnapproved(request, unapprovedRedirectUrl);
-  }
-
-  return onAuthSuccess
-    ? await onAuthSuccess(claims, request, response)
-    : response;
-}
-
-function unauthorizedJson(): NextResponse {
-  return NextResponse.json(
-    { code: PROXY_AUTH_ERROR.UNAUTHORIZED },
-    { status: 401 }
-  );
-}
-
-function forbiddenJson(): NextResponse {
-  return NextResponse.json(
-    { code: PROXY_AUTH_ERROR.FORBIDDEN },
-    { status: 403 }
-  );
-}
-
-async function maybeRefreshAndContinue(
-  request: NextRequest
-): Promise<NextResponse> {
-  const accessToken = request.cookies.get(ACCESS_TOKEN_COOKIE)?.value;
-  const refreshToken = request.cookies.get(REFRESH_TOKEN_COOKIE)?.value;
-  const deviceId = request.cookies.get(DEVICE_ID_COOKIE)?.value;
-
-  if (accessToken && isTokenFresh(accessToken)) {
-    return NextResponse.next();
-  }
-
-  if (refreshToken) {
-    const result = await tryRefresh(refreshToken, deviceId);
-    if (result) {
-      return nextWithRefreshedCookies(request, result.setCookieHeaders);
-    }
-    // 공개 경로라 요청은 그대로 통과시킨다. 다만 이 실패는 밖에서 보이지 않는다
-    // — 응답이 성공했을 때와 바이트 단위로 같기 때문이다. 유일한 증상은
-    // "로그인 상태로 보여야 할 화면이 익명으로 렌더되는 것" 이고, 그마저도
-    // 클라이언트 갱신(AutoTokenRefresh)이 있으면 가려진다. 그래서 여기서
-    // 한 줄이라도 남겨야 한다. tryRefresh 가 이미 사유를 찍었다.
-    warnAuth("refresh failed on public path, continuing anonymously", {
-      path: request.nextUrl.pathname,
-    });
-  }
-
-  return NextResponse.next();
-}
-
 /**
- * 갱신된 토큰을 이 요청의 cookie 헤더에도 반영한 응답을 만든다.
+ * exp 만 본다. 서명은 검증하지 않는다.
  *
- * Set-Cookie 는 브라우저에만 적용된다. 그것만 붙이면 지금 이 요청을 처리하는
- * 서버 컴포넌트는 여전히 만료된 access token 을 읽고, 갱신에 성공했는데도
- * 그 요청은 로그아웃으로 판정된다. access token 이 만료된 뒤 첫 요청마다
- * 발생하며, PWA 콜드 스타트처럼 항상 만료 상태에서 시작하는 경우 매번 겪는다.
- *
- * Next.js 는 미들웨어가 넘긴 요청 헤더를 다운스트림에 그대로 전달하므로
- * cookie 헤더를 새 토큰으로 바꿔 끼워 같은 요청에서 인증이 보이게 한다.
- * (response.headers.append 는 NextResponse 의 쿠키 프록시를 우회하기 때문에
- *  Next 의 x-middleware-set-cookie 병합 경로도 타지 않는다)
+ * 위조한 토큰으로 이 검사를 통과할 수는 있으나, 그래봐야 DAL 에서 걸린다.
+ * 프록시의 판단은 "어느 화면으로 보낼까" 이지 "권한이 있는가" 가 아니다.
  */
-function nextWithRefreshedCookies(
-  request: NextRequest,
-  setCookieHeaders: string[]
-): NextResponse {
-  const merged = new Map<string, string>();
-  for (const { name, value } of request.cookies.getAll()) {
-    merged.set(name, value);
-  }
-
-  // auth 서버는 도메인마다 같은 쿠키를 한 번씩 보내므로 이름 기준으로 덮어쓴다.
-  for (const header of setCookieHeaders) {
-    const pair = header.split(";")[0] ?? "";
-    const separator = pair.indexOf("=");
-    if (separator <= 0) continue;
-    merged.set(pair.slice(0, separator).trim(), pair.slice(separator + 1).trim());
-  }
-
-  const requestHeaders = new Headers(request.headers);
-  requestHeaders.set(
-    "cookie",
-    Array.from(merged, ([name, value]) => `${name}=${value}`).join("; ")
-  );
-
-  const response = NextResponse.next({ request: { headers: requestHeaders } });
-  for (const header of setCookieHeaders) {
-    response.headers.append("Set-Cookie", header);
-  }
-  return response;
-}
-
 function isTokenFresh(token: string): boolean {
   try {
     const parts = token.split(".");
     if (parts.length !== 3) return false;
     const payload = JSON.parse(
       Buffer.from(parts[1], "base64url").toString()
-    );
+    ) as { exp?: unknown };
     return (
       typeof payload.exp === "number" &&
       payload.exp > Math.floor(Date.now() / 1000) + REFRESH_BUFFER_SECONDS
@@ -266,98 +149,6 @@ function isTokenFresh(token: string): boolean {
   } catch {
     return false;
   }
-}
-
-async function verifyToken(
-  token: string
-): Promise<AccessTokenClaims | null> {
-  try {
-    const { payload } = await jwtVerify(token, jwks, {
-      issuer: AUTH_SERVER_URL,
-    });
-    if (isAccessTokenClaims(payload)) return payload;
-    // 서명은 유효한데 클레임 모양이 다르다. auth 서버와 버전이 어긋났을 때 난다.
-    warnAuth("access token claims shape mismatch");
-    return null;
-  } catch (error) {
-    // 정상 만료(ERR_JWT_EXPIRED)는 갱신으로 이어지므로 소음이다. 나머지는 남긴다.
-    // 특히 ERR_JWKS_NO_MATCHING_KEY 는 키 로테이션이나 JWKS 도달 실패라
-    // 위조 토큰과 구분되어야 한다.
-    const code = errorCode(error);
-    if (code !== "ERR_JWT_EXPIRED") {
-      warnAuth("access token verification failed", { code });
-    }
-    return null;
-  }
-}
-
-interface RefreshSuccess {
-  newAccessToken: string;
-  setCookieHeaders: string[];
-}
-
-async function tryRefresh(
-  refreshToken: string,
-  deviceId?: string
-): Promise<RefreshSuccess | null> {
-  try {
-    const res = await fetch(REFRESH_URL, {
-      method: "POST",
-      headers: { Cookie: buildRefreshCookieHeader(refreshToken, deviceId) },
-    });
-
-    if (!res.ok) {
-      // 이 요청은 브라우저가 아니라 서버에서 나간다. UA 는 런타임 기본값이고
-      // cf_clearance 같은 챌린지 통과 쿠키도 없으므로, auth 서버 앞에 WAF 나
-      // 봇 방어가 있으면 origin 에 닿기 전에 잘린다. 2026-07-19 에 실제로
-      // Cloudflare Bot Fight Mode 가 403 + cf-mitigated: challenge 로 막았다.
-      // 그때 auth 서버 로그에는 아무것도 남지 않았다 — 도달을 못 했으니까.
-      // 그래서 상태 코드와 함께 edge 가 남긴 힌트를 같이 찍는다.
-      warnAuth("token refresh rejected", {
-        status: res.status,
-        server: res.headers.get("server"),
-        cfRay: res.headers.get("cf-ray"),
-        cfMitigated: res.headers.get("cf-mitigated"),
-      });
-      return null;
-    }
-
-    const setCookieHeaders = res.headers.getSetCookie();
-    const newAccessToken = extractAccessToken(setCookieHeaders);
-    if (!newAccessToken) {
-      // 200 인데 access token 이 없다. 쿠키 이름이 어긋났거나 중간 프록시가
-      // Set-Cookie 를 떨궜다. 값은 절대 찍지 않고 이름만 남긴다.
-      warnAuth("refresh succeeded but no access token cookie", {
-        cookieNames: setCookieHeaders.map((h) => h.split("=")[0]),
-      });
-      return null;
-    }
-
-    return { newAccessToken, setCookieHeaders };
-  } catch (error) {
-    // DNS · TLS · 타임아웃. auth 서버가 내려갔거나 경로가 막힌 경우다.
-    warnAuth("token refresh request failed", { code: errorCode(error) });
-    return null;
-  }
-}
-
-function buildRefreshCookieHeader(
-  refreshToken: string,
-  deviceId?: string
-): string {
-  const cookies = [`${REFRESH_TOKEN_COOKIE}=${refreshToken}`];
-  if (deviceId) {
-    cookies.push(`${DEVICE_ID_COOKIE}=${deviceId}`);
-  }
-  return cookies.join("; ");
-}
-
-function extractAccessToken(setCookieHeaders: string[]): string | null {
-  for (const header of setCookieHeaders) {
-    const match = header.match(new RegExp(`^${ACCESS_TOKEN_COOKIE}=([^;]+)`));
-    if (match) return match[1];
-  }
-  return null;
 }
 
 function isPublicPath(pathname: string, publicPaths: string[]): boolean {
@@ -371,39 +162,16 @@ function isPublicPath(pathname: string, publicPaths: string[]): boolean {
 
 function redirectToLogin(
   request: NextRequest,
-  loginRedirectUrl?: LoginRedirectUrl
+  loginRedirectUrl: LoginRedirectUrl | undefined
 ): NextResponse {
-  const redirectUrl = resolveLoginRedirectUrl(request, loginRedirectUrl);
+  const redirectUrl =
+    typeof loginRedirectUrl === "function"
+      ? loginRedirectUrl(request)
+      : loginRedirectUrl;
+
   if (redirectUrl) {
     const url = `${LOGIN_URL}?redirect_url=${encodeURIComponent(redirectUrl)}`;
     return NextResponse.redirect(new URL(url, request.url));
   }
   return NextResponse.redirect(new URL("/", request.url));
 }
-
-function redirectToUnapproved(
-  request: NextRequest,
-  unapprovedRedirectUrl?: LoginRedirectUrl
-): NextResponse {
-  const redirectUrl = resolveLoginRedirectUrl(request, unapprovedRedirectUrl);
-  if (redirectUrl) {
-    return NextResponse.redirect(new URL(redirectUrl, request.url));
-  }
-  const errorUrl = new URL(`${AUTH_SERVER_URL}/error`);
-  errorUrl.searchParams.set("code", PROXY_AUTH_ERROR.FORBIDDEN);
-  errorUrl.searchParams.set("from", request.url);
-  return NextResponse.redirect(errorUrl);
-}
-
-function resolveLoginRedirectUrl(
-  request: NextRequest,
-  loginRedirectUrl?: LoginRedirectUrl
-): string | undefined {
-  if (typeof loginRedirectUrl === "function") {
-    return loginRedirectUrl(request);
-  }
-  return loginRedirectUrl;
-}
-
-export type { AccessTokenClaims } from "../types.js";
-export type { LemonUser } from "../types.js";

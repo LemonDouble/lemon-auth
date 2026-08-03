@@ -23,7 +23,7 @@ NEXT_PUBLIC_LEMON_AUTH_MOCK_USER='{"uid":"local-user","nickname":"Local User","p
 Mock User가 활성화되면:
 
 - `getUser()`, `getSession()`, `requireAuth()`, `requireClient()`는 mock user를 로그인 유저처럼 반환합니다.
-- `createAuthProxy()`는 mock user를 인증 성공으로 처리하고, `clientId` 승인 체크는 유지합니다.
+- `createAuthProxy()`는 모든 요청을 통과시킵니다. 승인 체크는 DAL에서 수행됩니다.
 - `loginUrl(redirectUrl)`은 `redirectUrl`을 그대로 반환합니다.
 - `profileUrl(redirectUrl?)`은 `redirectUrl ?? "/"`를 반환합니다.
 - `refreshToken()`은 `true`, `logout()`은 no-op 후 `true`를 반환합니다.
@@ -34,7 +34,7 @@ Mock User가 활성화되면:
 |------|------|------|
 | `@lemondouble/lemon-auth/server` | Server Components, Route Handlers, Server Actions | JWT 검증, 유저 조회, 인증 체크 |
 | `@lemondouble/lemon-auth/client` | Client Components | AuthProvider, useAuth 훅, URL 헬퍼 |
-| `@lemondouble/lemon-auth/proxy` | proxy.ts | 토큰 자동 갱신 프록시 |
+| `@lemondouble/lemon-auth/proxy` | proxy.ts | 쿠키 기반 optimistic check |
 
 ---
 
@@ -237,7 +237,20 @@ import {
 
 ## Proxy — `@lemondouble/lemon-auth/proxy`
 
-Next.js 16의 `proxy.ts`에서 사용합니다. 보호 경로 접근 시 JWT 검증 + 만료 임박 토큰 자동 갱신을 처리합니다.
+Next.js 16의 `proxy.ts`에서 사용합니다. **쿠키만 읽는 optimistic check** 만 합니다.
+
+> **0.8.0 에서 동작이 바뀌었습니다.** 프록시는 더 이상 토큰을 갱신하지 않고
+> JWT 서명도 검증하지 않습니다. 갱신은 `<SessionRestore />`(브라우저)가 맡고,
+> 진짜 검증은 DAL(`getSession` / `requireClient`)이 합니다. 마이그레이션은
+> [0.7.x → 0.8.0](#07x--080-마이그레이션) 참고.
+
+Next.js 공식 인증 가이드의 권장 구조를 그대로 따릅니다.
+
+> since Proxy runs on every route, including prefetched routes, it's important to
+> only read the session from the cookie (optimistic checks), and avoid database
+> checks to prevent performance issues.
+>
+> — [Next.js — Authentication](https://nextjs.org/docs/app/guides/authentication)
 
 ### `createAuthProxy(options?)`
 
@@ -246,11 +259,9 @@ Next.js 16의 `proxy.ts`에서 사용합니다. 보호 경로 접근 시 JWT 검
 import { createAuthProxy } from "@lemondouble/lemon-auth/proxy";
 
 export default createAuthProxy({
-  publicPaths: ["/", "/about", "/api/public/*"],
+  publicPaths: ["/", "/about", "/api/public/*", "/auth/restore"],
   bypassPaths: ["/workbox-*"],
-  clientId: process.env.CLIENT_ID,
   loginRedirectUrl: (request) => request.url,
-  unapprovedRedirectUrl: "/pending-approval",
 });
 
 export const config = {
@@ -266,26 +277,33 @@ export const config = {
 |------|------|--------|------|
 | `publicPaths` | `string[]` | `[]` | 인증 없이 접근 가능한 경로. `*`로 끝나면 prefix 매칭 (예: `"/api/public/*"`) |
 | `bypassPaths` | `string[]` | `[]` | proxy가 refresh도 하지 않고 바로 통과시킬 추가 경로. 기본 PWA 경로(`/sw.js`, `/manifest.webmanifest` 등)는 항상 bypass |
-| `apiPaths` | `string[]` | `["/api/*"]` | 보호 API 경로. 인증 실패 시 redirect 대신 JSON 응답을 반환한다. disable하려면 `[]` |
-| `clientId` | `string` | `undefined` | 설정 시 `approved_clients`에 포함 여부를 체크 |
+| `apiPaths` | `string[]` | `["/api/*"]` | 보호 API 경로. 인증 실패 시 redirect 대신 401 JSON을 반환한다. disable하려면 `[]` |
 | `loginRedirectUrl` | `string \| (request: NextRequest) => string` | `undefined` | 미인증 시 Google 로그인 후 돌아올 URL. deep link 보존이 필요하면 `(request) => request.url` 사용. 미설정 시 `"/"` 로 redirect |
-| `unapprovedRedirectUrl` | `string \| (request: NextRequest) => string` | `undefined` | 로그인은 됐지만 `clientId` 미승인일 때 redirect할 URL. 미설정 시 auth-server `/error?code=FORBIDDEN`로 redirect (무한 loop 방지) |
-| `onAuthSuccess` | `(claims, request, response) => Promise<NextResponse> \| NextResponse` | `undefined` | 보호 경로에서 인증 성공 시 호출되는 콜백. DB 동기화, 헤더 주입 등 앱별 로직에 사용 |
+| `restorePath` | `string` | `"/auth/restore"` | `<SessionRestore />` 를 마운트한 경로. **`publicPaths` 에도 넣어야 한다** (안 넣으면 무한 루프) |
 
 #### 동작 방식
 
 **Bypass 경로** (기본 PWA/정적 리소스 + `bypassPaths`):
 
-1. `/sw.js`, `/manifest.webmanifest`, `/manifest.json`, `/favicon.ico` 등은 인증/갱신 없이 항상 통과
+1. `/sw.js`, `/manifest.webmanifest`, `/favicon.ico` 등은 항상 통과
 2. 가능하면 `matcher`에서도 제외해 proxy 실행 자체를 피하는 것을 권장
+
+**프리페치 요청**: 다른 요청과 똑같이 처리합니다. 통과시키면 만료된 토큰으로
+페이지가 렌더되고 거기서 나온 redirect 가 라우터 캐시에 굳어, 어느 링크를 눌러도
+같은 곳으로 튀게 됩니다. 반면 프록시가 돌려주는 `restorePath` 리다이렉트는 굳어도
+해가 없습니다 — 복구 경로는 막다른 길이 아니라 세션을 되살리고 `next` 로
+되돌려 보내므로 목적지도 보존됩니다.
 
 **보호 경로** (`publicPaths`에 해당하지 않는 경로):
 
-1. `lemon_access_token` 쿠키가 있고 만료까지 60초 이상 남았으면 → JWKS 검증 → `onAuthSuccess` 호출 → 통과
-2. 로그인은 됐지만 `clientId` 미승인이면 `unapprovedRedirectUrl`로 redirect
-3. 만료 임박이거나 검증 실패 시 `lemon_refresh_token` + `device_id`로 자동 갱신 시도
-4. 갱신 성공 → 새 토큰 쿠키 설정 → `onAuthSuccess` 호출 → 통과
-5. 갱신 실패 → `loginRedirectUrl`을 `redirect_url`로 담아 로그인 페이지로 redirect
+1. `lemon_access_token` 이 있고 만료까지 60초 이상 남았으면 → 통과
+2. 아니고 `apiPaths` 에 해당하면 → `401 { code: "UNAUTHORIZED" }`
+3. 아니고 `lemon_refresh_token` 이 있으면 → `restorePath?next=<원래 경로>` 로 redirect
+4. 둘 다 없으면 → `loginRedirectUrl` 을 담아 로그인 페이지로 redirect
+
+`exp` 만 보고 **서명은 검증하지 않습니다.** 위조 토큰으로 이 검사는 통과할 수
+있으나 DAL 에서 걸립니다. 프록시의 판단은 "어느 화면으로 보낼까" 이지
+"권한이 있는가" 가 아닙니다. 권한 판단은 반드시 DAL 에서 하십시오.
 
 `loginRedirectUrl`은 고정 URL 문자열과 요청별 resolver 함수를 모두 지원합니다.
 
@@ -301,10 +319,55 @@ createAuthProxy({
 });
 ```
 
-**공개 경로** (`publicPaths`에 해당하는 경로):
+**공개 경로** (`publicPaths`에 해당하는 경로): 아무 판단 없이 통과합니다.
+만료된 세션은 루트 레이아웃의 `<AutoTokenRefresh />` 가 복구합니다.
 
-1. 토큰이 만료 임박이면 백그라운드로 갱신 (실패해도 통과)
-2. 인증 여부와 무관하게 항상 통과
+### 0.7.x → 0.8.0 마이그레이션
+
+프록시가 갱신을 하지 않게 되면서, 앱이 복구 경로를 마운트해야 합니다.
+
+**1. `<SessionRestore />` 를 마운트하고 `publicPaths` 에 추가**
+
+```tsx
+// app/auth/restore/page.tsx
+import { Suspense } from "react";
+import { SessionRestore } from "@lemondouble/lemon-auth/client";
+
+export const dynamic = "force-dynamic";
+
+export default function RestorePage() {
+  return (
+    <Suspense fallback={null}>
+      <SessionRestore fallback={<p>세션 복원 중...</p>} />
+    </Suspense>
+  );
+}
+```
+
+```ts
+// proxy.ts
+publicPaths: ["/", "/auth/restore", ...],
+```
+
+`useSearchParams()` 를 쓰므로 `<Suspense>` 로 감싸야 빌드가 통과합니다.
+
+**2. `<AutoTokenRefresh />` 를 루트 레이아웃으로**
+
+공개 경로에서 만료된 세션을 되살리는 안전망입니다. 특정 페이지에만 두면
+그 페이지를 거치지 않는 경로에는 복구 수단이 없습니다.
+
+**3. 제거된 옵션 정리**
+
+| 제거 | 대신 |
+|---|---|
+| `clientId` | DAL 의 `getSession({ clientId })` / `requireClient(clientId)` |
+| `unapprovedRedirectUrl` | `requireClient(clientId, { unapprovedRedirectTo })` |
+| `onAuthSuccess` | DAL. **미들웨어에서 DB 를 조회하지 마십시오** (아래) |
+
+`onAuthSuccess` 는 DB 동기화를 유도하는 훅이었으나, 프록시는 프리페치를 포함해
+모든 요청에서 돌기 때문에 그 자리에서 DB 를 건드리면 안 됩니다. 사용자 동기화
+같은 작업은 DAL(`getUser()` 를 부르는 곳)로 옮기고 React `cache()` 로 요청당
+한 번만 돌게 하십시오.
 
 **API 경로** (`apiPaths` 매칭, 기본 `/api/*`):
 
@@ -426,10 +489,49 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 
 | 상황 | user | AutoTokenRefresh |
 |------|------|-----------------|
-| 정상 요청 (proxy 실행됨) | 있음 | 아무것도 안 함 (skip) |
-| PWA 캐시 히트 + 갱신 시도 중 | 없음 | `fallback` 렌더 |
-| PWA 캐시 히트 + 유효한 `lemon_refresh_token` | 없음 | 갱신 → `router.refresh()` |
-| PWA 캐시 히트 + 만료된 `lemon_refresh_token` | 없음 | 갱신 실패 → `children` 렌더 |
+| 정상 요청 | 있음 | 아무것도 안 함 (skip) |
+| 공개 경로 + 갱신 시도 중 | 없음 | `fallback` 렌더 |
+| 공개 경로 + 유효한 `lemon_refresh_token` | 없음 | 갱신 → `router.refresh()` |
+| 공개 경로 + 만료된 `lemon_refresh_token` | 없음 | 갱신 실패 → `children` 렌더 |
+
+**루트 레이아웃에 두십시오.** 특정 페이지에만 두면 그 페이지를 거치지 않는
+경로에는 복구 수단이 없습니다.
+
+### `<SessionRestore>`
+
+보호 경로에서 access token 이 만료됐을 때 프록시가 보내는 착지점입니다.
+`refreshToken()` 을 부른 뒤 `next` 파라미터가 가리키는 곳으로 되돌립니다.
+
+```tsx
+// app/auth/restore/page.tsx
+import { Suspense } from "react";
+import { SessionRestore } from "@lemondouble/lemon-auth/client";
+
+export const dynamic = "force-dynamic";
+
+export default function RestorePage() {
+  return (
+    <Suspense fallback={null}>
+      <SessionRestore fallback={<p>세션 복원 중...</p>} />
+    </Suspense>
+  );
+}
+```
+
+| prop | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `fallback` | `React.ReactNode` | **필수** | 갱신하는 동안 렌더할 UI |
+| `failedRedirectUrl` | `string` | 선택 | 갱신 실패 시 보낼 곳. 기본은 로그인 |
+
+- 이 경로를 프록시의 `publicPaths` 에 **반드시** 넣으십시오. 안 넣으면 프록시가
+  복구 경로를 다시 복구 경로로 보내 무한 루프가 됩니다.
+- `useSearchParams()` 를 쓰므로 `<Suspense>` 로 감싸야 빌드가 통과합니다.
+- `next` 는 같은 출처의 경로만 허용합니다. 열린 리다이렉트가 되지 않도록
+  `//evil.com` 같은 값은 `/` 로 떨어뜨립니다.
+
+**`<AutoTokenRefresh>` 와의 차이**: `AutoTokenRefresh` 는 공개 경로에서 화면을
+막지 않고 조용히 복구하는 안전망이고, `SessionRestore` 는 보호 경로 진입이
+막혔을 때 갱신하고 원래 목적지로 되돌리는 전용 착지점입니다. 둘 다 두십시오.
 
 ### `loginUrl(redirectUrl)`
 
@@ -544,7 +646,7 @@ interface UserProfile {
 
 새 Next.js 16 프로젝트에 인증을 추가하는 권장 예시입니다.
 
-### 1. proxy.ts — 토큰 자동 갱신
+### 1. proxy.ts — optimistic check
 
 ```ts
 import {
@@ -553,12 +655,16 @@ import {
 } from "@lemondouble/lemon-auth/proxy";
 
 export default createAuthProxy({
-  publicPaths: ["/", "/login", "/pending-approval", "/api/public/*"],
+  publicPaths: [
+    "/",
+    "/login",
+    "/pending-approval",
+    "/auth/restore",
+    "/api/public/*",
+  ],
   bypassPaths: ["/workbox-*"],
   apiPaths: DEFAULT_API_PATHS,
-  clientId: process.env.CLIENT_ID,
   loginRedirectUrl: (request) => request.url,
-  unapprovedRedirectUrl: "/pending-approval",
 });
 
 export const config = {
@@ -569,35 +675,48 @@ export const config = {
 ```
 
 `loginRedirectUrl: (request) => request.url`은 로그인 후 사용자가 원래 요청한 path/query로 돌아오게 합니다.
-`apiPaths`에 매칭되는 보호 API는 인증 실패 시 redirect 대신 `401/403` JSON 응답을 반환합니다.
+`apiPaths`에 매칭되는 보호 API는 인증 실패 시 redirect 대신 `401` JSON 응답을 반환합니다.
 기본 PWA 파일(`/sw.js`, `/manifest.webmanifest` 등)은 항상 bypass되며, 앱에서 추가로 생성하는 workbox 파일은 `bypassPaths`에 넣을 수 있습니다.
 
-`onAuthSuccess`를 사용하면 인증 성공 후 DB 동기화, 헤더 주입 등 앱별 로직을 끼워넣을 수 있습니다:
+**`/auth/restore` 를 `publicPaths` 에 넣는 것을 빠뜨리지 마십시오.** 프록시가
+복구 경로 자신을 다시 복구 경로로 보내 무한 루프가 됩니다.
+
+사용자 DB 동기화 같은 작업은 **프록시가 아니라 DAL 에서** 하십시오. 프록시는
+프리페치를 포함해 모든 요청에서 돌기 때문에, 그 자리에서 DB 를 건드리면 화면
+하나 여는 데 쿼리가 여러 번 나갑니다.
 
 ```ts
-import {
-  createAuthProxy,
-  DEFAULT_API_PATHS,
-} from "@lemondouble/lemon-auth/proxy";
+// lib/dal.ts
+import { cache } from "react";
+import { getUser } from "@lemondouble/lemon-auth/server";
 import { upsertUser } from "@/lib/db";
 
-export default createAuthProxy({
-  publicPaths: ["/", "/login", "/pending-approval", "/api/public/*"],
-  bypassPaths: ["/workbox-*"],
-  apiPaths: DEFAULT_API_PATHS,
-  clientId: process.env.CLIENT_ID,
-  loginRedirectUrl: (request) => request.url,
-  unapprovedRedirectUrl: "/pending-approval",
-  onAuthSuccess: async (claims, request, response) => {
-    await upsertUser(claims);
-    response.headers.set("x-user-uid", claims.sub);
-    response.headers.set("x-user-nickname", encodeURIComponent(claims.nickname));
-    return response;
-  },
+export const getCurrentUser = cache(async () => {
+  const user = await getUser();
+  if (!user) return null;
+  await upsertUser(user);   // React cache() 덕에 요청당 한 번만 돈다
+  return user;
 });
 ```
 
-### 2. app/layout.tsx — AuthProvider + AutoTokenRefresh
+### 2. app/auth/restore/page.tsx — 세션 복구 착지점
+
+```tsx
+import { Suspense } from "react";
+import { SessionRestore } from "@lemondouble/lemon-auth/client";
+
+export const dynamic = "force-dynamic";
+
+export default function RestorePage() {
+  return (
+    <Suspense fallback={null}>
+      <SessionRestore fallback={<p>세션 복원 중...</p>} />
+    </Suspense>
+  );
+}
+```
+
+### 3. app/layout.tsx — AuthProvider + AutoTokenRefresh
 
 ```tsx
 import { getUser } from "@lemondouble/lemon-auth/server";
@@ -618,7 +737,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 }
 ```
 
-### 3. app/page.tsx — 공개 페이지 (로그인 버튼)
+### 4. app/page.tsx — 공개 페이지 (로그인 버튼)
 
 ```tsx
 import { getUser } from "@lemondouble/lemon-auth/server";
@@ -642,7 +761,7 @@ export function LoginButton() {
 }
 ```
 
-### 4. app/dashboard/page.tsx — 보호 페이지
+### 5. app/dashboard/page.tsx — 보호 페이지
 
 ```tsx
 import { requireAuth } from "@lemondouble/lemon-auth/server";
@@ -653,7 +772,7 @@ export default async function Dashboard() {
 }
 ```
 
-### 5. 로그아웃
+### 6. 로그아웃
 
 ```tsx
 "use client";

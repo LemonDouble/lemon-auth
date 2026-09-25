@@ -20,10 +20,7 @@ export function profileUrl(redirectUrl?: string): string {
   return PROFILE_PAGE_URL;
 }
 
-/**
- * 로그아웃. 쿠키 삭제는 응답의 Set-Cookie 가 한다 — 세션 쿠키는 httpOnly
- * 라서 JS 로는 지울 수 없다.
- */
+/** 쿠키는 httpOnly 라 삭제는 응답의 Set-Cookie 가 한다. */
 export async function logout(): Promise<boolean> {
   if (isMockAuthEnabled()) return true;
 
@@ -40,13 +37,7 @@ export async function logout(): Promise<boolean> {
 
 export type RefreshSessionResult = "ok" | "unauthorized" | "unavailable";
 
-/**
- * 세션 갱신. 쿠키 반영은 응답의 Set-Cookie 가 한다.
- *
- * "unauthorized" 는 refresh token 이 죽은 것이고, 서버가 그 응답에서 세션
- * 쿠키를 함께 지워준다. "unavailable" 은 서버 · 네트워크 사정이므로 세션이
- * 죽었다고 판단하면 안 된다.
- */
+/** "unavailable" 은 서버·네트워크 사정이라 세션이 죽었다고 판단하면 안 된다. */
 export async function refreshSession(): Promise<RefreshSessionResult> {
   if (isMockAuthEnabled()) return "ok";
 

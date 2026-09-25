@@ -7,22 +7,8 @@ import {
 import { isMockAuthEnabled } from "../mock.js";
 
 /**
- * 프록시는 라우팅 결정만 한다: 신선하면 통과, 아니면 복구 경로로.
- *
- * Next.js 공식 인증 가이드의 optimistic check 다. 프리페치를 포함한 모든
- * 요청에서 돌기 때문에 쿠키의 exp 만 읽고, 네트워크 · DB · 서명 검증을
- * 하지 않는다. 보안 판단은 DAL(getSession / requireAuth)이 한다.
- *
- * 갱신 주체는 RESTORE_PATH 에 마운트된 <SessionRestore /> 하나뿐이다.
- * 공개 경로도 refresh 쿠키가 남아 있으면 복구를 거치게 해서, 만료된 세션이
- * "로그아웃 상태로 렌더됐다가 뒤늦게 뒤집히는" 화면을 없앤다. (0.8.x 까지는
- * 이 몫을 레이아웃의 <AutoTokenRefresh /> 가 맡았는데, 복구 경로와 갱신
- * 주체가 둘이 되는 문제가 있었다)
- *
- * 0.7.x 까지는 프록시가 직접 auth 서버로 갱신을 보냈다. 미들웨어는 요청마다
- * 별도 인스턴스로 떠서 직렬화가 안 되므로, 프리페치가 겹치면 같은 refresh
- * token 으로 갱신이 동시에 나가 회전 경쟁이 났고 계정 토큰이 통째로
- * 폐기되는 일이 반복됐다. 다시 여기에 네트워크 호출을 넣지 말 것.
+ * 쿠키 exp 만 보고 라우팅만 한다. 서명 검증은 DAL, 갱신은 <SessionRestore /> 가 맡는다.
+ * 여기에 네트워크 호출(갱신)을 넣지 말 것 — 프리페치마다 동시 갱신되어 refresh 회전 경쟁이 난다.
  */
 
 const REFRESH_BUFFER_SECONDS = 60;
@@ -101,16 +87,12 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
       );
     }
 
-    // 서버 액션 등 비-GET 을 리다이렉트하면 액션 프로토콜이 깨진다.
-    // 통과시키고 DAL 이 거부하게 둔다.
+    // 서버 액션 등 비-GET 은 리다이렉트하면 깨지므로 DAL 이 거부하게 둔다.
     if (request.method !== "GET") {
       return NextResponse.next();
     }
 
-    // refresh 가 남아 있으면 아직 로그인이 풀린 게 아니다. 브라우저가
-    // 갱신할 수 있도록 복구 경로로 보낸다. 프리페치가 이 리다이렉트를
-    // 캐시에 굳혀도 해가 없다 — 복구 경로는 스스로 세션을 되살리고
-    // next 로 되돌려 보내므로 목적지가 보존된다.
+    // refresh 가 남아 있으면 브라우저가 갱신하도록 복구 경로로 보낸다. 공개 경로도 포함.
     if (request.cookies.get(REFRESH_TOKEN_COOKIE)?.value) {
       const restore = new URL(RESTORE_PATH, request.url);
       restore.searchParams.set("next", pathname + request.nextUrl.search);
@@ -125,12 +107,7 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
   };
 }
 
-/**
- * exp 만 본다. 서명은 검증하지 않는다.
- *
- * 위조한 토큰으로 이 검사를 통과할 수는 있으나, 그래봐야 DAL 에서 걸린다.
- * 프록시의 판단은 "어느 화면으로 보낼까" 이지 "권한이 있는가" 가 아니다.
- */
+/** exp 만 본다. 위조 토큰은 여기를 통과해도 DAL 에서 걸린다. */
 function isTokenFresh(token: string): boolean {
   try {
     const parts = token.split(".");

@@ -1,13 +1,10 @@
 import { cache } from "react";
 import { redirect } from "next/navigation";
-import type { LemonSession, LemonUser } from "../types.js";
+import type { AccessTokenClaims, LemonSession, LemonUser } from "../types.js";
 import { AUTH_SERVER_URL } from "../constants.js";
-import { isApprovedClient } from "../approval.js";
 import { verifyAccessToken } from "./verify.js";
 
-function claimsToUser(
-  claims: NonNullable<Awaited<ReturnType<typeof verifyAccessToken>>>
-): LemonUser {
+function claimsToUser(claims: AccessTokenClaims): LemonUser {
   return {
     uid: claims.sub,
     nickname: claims.nickname,
@@ -23,12 +20,8 @@ export const getUser = cache(async (): Promise<LemonUser | null> => {
   return claimsToUser(claims);
 });
 
-export interface GetSessionOptions {
-  clientId?: string;
-}
-
 const getSessionByClientId = cache(
-  async (clientId?: string): Promise<LemonSession> => {
+  async (clientId: string): Promise<LemonSession> => {
     const user = await getUser();
     if (!user) return { type: "none" };
     if (!isApprovedClient(user.approvedClients, clientId)) {
@@ -38,40 +31,29 @@ const getSessionByClientId = cache(
   }
 );
 
-export async function getSession(
-  options: GetSessionOptions = {}
-): Promise<LemonSession> {
-  return getSessionByClientId(options.clientId);
-}
-
-export async function requireAuth(redirectTo = "/"): Promise<LemonUser> {
-  const user = await getUser();
-  if (user) return user;
-  redirect(redirectTo);
-}
-
-export interface RequireClientOptions {
-  loginRedirectTo?: string;
-  unapprovedRedirectTo?: string;
+export async function getSession({
+  clientId,
+}: {
+  clientId: string;
+}): Promise<LemonSession> {
+  return getSessionByClientId(clientId);
 }
 
 export async function requireClient(
   clientId: string,
-  optionsOrRedirectTo: string | RequireClientOptions = "/"
+  {
+    loginRedirectTo = "/",
+    unapprovedRedirectTo = `${AUTH_SERVER_URL}/error?code=FORBIDDEN`,
+  }: { loginRedirectTo?: string; unapprovedRedirectTo?: string } = {}
 ): Promise<LemonUser> {
-  const options =
-    typeof optionsOrRedirectTo === "string"
-      ? { loginRedirectTo: optionsOrRedirectTo }
-      : optionsOrRedirectTo;
   const session = await getSession({ clientId });
-  if (session.type === "none") {
-    redirect(options.loginRedirectTo ?? "/");
-  }
-  if (session.type === "unapproved") {
-    redirect(
-      options.unapprovedRedirectTo ??
-        `${AUTH_SERVER_URL}/error?code=FORBIDDEN`
-    );
-  }
+  if (session.type === "none") redirect(loginRedirectTo);
+  if (session.type === "unapproved") redirect(unapprovedRedirectTo);
   return session.user;
+}
+
+// clientId 가 비어 있으면(환경변수 누락) 아무도 승인되지 않는다. "*" 는 mock user 용이다.
+function isApprovedClient(approvedClients: string[], clientId: string): boolean {
+  if (!clientId) return false;
+  return approvedClients.includes(clientId) || approvedClients.includes("*");
 }

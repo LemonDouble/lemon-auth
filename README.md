@@ -22,7 +22,7 @@ NEXT_PUBLIC_LEMON_AUTH_MOCK_USER='{"uid":"local-user","nickname":"Local User","p
 
 Mock User가 활성화되면:
 
-- `getUser()`, `getSession()`, `requireAuth()`, `requireClient()`는 mock user를 로그인 유저처럼 반환합니다.
+- `getUser()`, `getSession()`, `requireClient()`는 mock user를 로그인 유저처럼 반환합니다.
 - `createAuthProxy()`는 모든 요청을 통과시킵니다. 승인 체크는 DAL에서 수행됩니다.
 - `loginUrl(redirectUrl)`은 `redirectUrl`을 그대로 반환합니다.
 - `profileUrl(redirectUrl?)`은 `redirectUrl ?? "/"`를 반환합니다.
@@ -32,7 +32,7 @@ Mock User가 활성화되면:
 
 | 경로 | 환경 | 용도 |
 |------|------|------|
-| `@lemondouble/lemon-auth/server` | Server Components, Route Handlers, Server Actions | JWT 검증, 유저 조회, 인증 체크 |
+| `@lemondouble/lemon-auth/server` | Server Components, Route Handlers, Server Actions | 유저 조회, 인증 체크, URL 헬퍼 |
 | `@lemondouble/lemon-auth/client` | Client Components | AuthProvider, useAuth 훅, URL 헬퍼 |
 | `@lemondouble/lemon-auth/proxy` | proxy.ts | 쿠키 기반 optimistic check |
 
@@ -42,55 +42,9 @@ Mock User가 활성화되면:
 
 Server Components, Route Handlers, Server Actions에서 사용합니다.
 
-### `verifyAccessToken()`
-
-쿠키에서 `lemon_access_token`을 읽어 JWKS(ES256)로 검증합니다.
-
-```ts
-import { verifyAccessToken } from "@lemondouble/lemon-auth/server";
-
-const claims = await verifyAccessToken();
-// → AccessTokenClaims | null
-```
-
-반환되는 `AccessTokenClaims`:
-
-```ts
-interface AccessTokenClaims {
-  token_type: "access";     // access token 여부
-  sub: string;              // 사용자 UUID
-  nickname: string;         // 닉네임
-  profile_image_url: string; // 프로필 이미지 URL
-  role: "user" | "admin";   // 역할
-  approved_clients: string[]; // 승인된 클라이언트 ID 목록
-  iss: string;              // issuer (https://auth.lemondouble.com)
-  exp: number;              // 만료 시간
-  iat: number;              // 발급 시간
-}
-```
-
-### `verifyAccessTokenString(token)`
-
-토큰 문자열을 직접 전달하여 검증합니다. 쿠키 대신 `Authorization` 헤더 등에서 토큰을 꺼낼 때 사용합니다.
-
-```ts
-import { verifyAccessTokenString } from "@lemondouble/lemon-auth/server";
-
-// Route Handler에서 Authorization 헤더 사용 예시
-export async function GET(request: Request) {
-  const token = request.headers.get("Authorization")?.replace("Bearer ", "");
-  if (!token) return new Response(null, { status: 401 });
-
-  const claims = await verifyAccessTokenString(token);
-  if (!claims) return new Response(null, { status: 401 });
-
-  return Response.json({ userId: claims.sub });
-}
-```
-
 ### `getUser()`
 
-`verifyAccessToken()`을 호출하고 결과를 `LemonUser` 객체로 변환합니다.
+쿠키의 `lemon_access_token`을 JWKS(ES256)로 검증하고 `LemonUser` 객체로 변환합니다.
 React `cache()`로 감싸져 있어서 **같은 요청 내에서 여러 번 호출해도 JWT 검증은 1회만** 실행됩니다.
 
 ```ts
@@ -117,9 +71,9 @@ interface LemonUser {
 }
 ```
 
-### `getSession(options?)`
+### `getSession({ clientId })`
 
-로그인 상태와 클라이언트 승인 상태를 함께 반환합니다.
+로그인 상태와 클라이언트 승인 상태를 함께 반환합니다. `clientId`는 필수입니다. 빈 값(환경변수 누락 등)이면 모든 유저가 `unapproved`가 됩니다. 승인 없이 로그인 여부만 필요하면 `getUser()`를 씁니다.
 
 ```ts
 import { getSession } from "@lemondouble/lemon-auth/server";
@@ -145,28 +99,9 @@ type LemonSession =
   | { type: "authenticated"; user: LemonUser };
 ```
 
-### `requireAuth(redirectTo?)`
-
-인증된 유저를 반환합니다. 미인증이면 `redirectTo`로 redirect합니다.
-
-```ts
-import { requireAuth } from "@lemondouble/lemon-auth/server";
-
-export default async function ProtectedPage() {
-  const user = await requireAuth();        // 미인증 시 "/" 로 redirect
-  // const user = await requireAuth("/login"); // 미인증 시 "/login" 으로 redirect
-
-  return <p>{user.nickname}님의 대시보드</p>;
-}
-```
-
-| 파라미터 | 타입 | 기본값 | 설명 |
-|---------|------|--------|------|
-| `redirectTo` | `string` | `"/"` | 미인증 시 redirect 경로 |
-
 ### `requireClient(clientId, options?)`
 
-`requireAuth()` + `approved_clients` 체크. 관리자가 승인한 사용자만 접근할 수 있는 서비스에서 사용합니다.
+로그인 + `approved_clients` 체크. 관리자가 승인한 사용자만 접근할 수 있는 서비스에서 사용합니다.
 
 ```ts
 import { requireClient } from "@lemondouble/lemon-auth/server";
@@ -186,25 +121,14 @@ export default async function Page() {
 |---------|------|--------|------|
 | `clientId` | `string` | (필수) | 체크할 클라이언트 UUID |
 | `options.loginRedirectTo` | `string` | `"/"` | 미인증 시 redirect 경로 |
-| `options.unapprovedRedirectTo` | `string` | `undefined` | 로그인은 됐지만 클라이언트 미승인 시 redirect 경로. 미설정 시 auth-server `/error?code=FORBIDDEN`로 redirect (proxy 동작과 동일) |
+| `options.unapprovedRedirectTo` | `string` | auth-server `/error?code=FORBIDDEN` | 로그인은 됐지만 클라이언트 미승인 시 redirect 경로 |
 
-### 상수
+### `loginUrl()` / `profileUrl()`
 
-서버 엔트리포인트에서 모든 상수를 re-export합니다.
+Client 엔트리포인트의 같은 함수를 Server Component에서도 쓸 수 있게 re-export합니다. 사용법은 [Client](#client--lemondoublelemon-authclient) 참고.
 
 ```ts
-import {
-  AUTH_SERVER_URL,       // "https://auth.lemondouble.com"
-  JWKS_URL,              // "https://auth.lemondouble.com/.well-known/jwks.json"
-  LOGIN_URL,             // "https://auth.lemondouble.com/api/oauth2/google/login"
-  REFRESH_URL,           // "https://auth.lemondouble.com/api/token/refresh"
-  LOGOUT_URL,            // "https://auth.lemondouble.com/api/token/logout"
-  PROFILE_URL,           // "https://auth.lemondouble.com/api/user/me"
-  PROFILE_PAGE_URL,      // "https://auth.lemondouble.com/profile"
-  ACCESS_TOKEN_COOKIE,   // "lemon_access_token"
-  REFRESH_TOKEN_COOKIE,  // "lemon_refresh_token"
-  DEVICE_ID_COOKIE,      // "device_id"
-} from "@lemondouble/lemon-auth/server";
+import { loginUrl, profileUrl } from "@lemondouble/lemon-auth/server";
 ```
 
 ---
@@ -234,7 +158,6 @@ import { createAuthProxy } from "@lemondouble/lemon-auth/proxy";
 
 export default createAuthProxy({
   publicPaths: ["/", "/about", "/api/public/*"],
-  bypassPaths: ["/workbox-*"],
   loginRedirectUrl: (request) => request.url,
 });
 
@@ -250,23 +173,23 @@ export const config = {
 | 옵션 | 타입 | 기본값 | 설명 |
 |------|------|--------|------|
 | `publicPaths` | `string[]` | `[]` | 로그인 없이 열어둘 경로. 익명이면 통과, 만료 세션이면 복구를 거친다. `*`로 끝나면 prefix 매칭 (예: `"/api/public/*"`) |
-| `bypassPaths` | `string[]` | `[]` | proxy가 아무 판단 없이 통과시킬 추가 경로. 기본 PWA 경로(`/sw.js`, `/manifest.webmanifest` 등)는 항상 bypass |
 | `apiPaths` | `string[]` | `["/api/*"]` | 보호 API 경로. 인증 실패 시 redirect 대신 401 JSON을 반환한다. disable하려면 `[]` |
 | `loginRedirectUrl` | `string \| (request: NextRequest) => string` | `undefined` | 미인증 시 Google 로그인 후 돌아올 URL. deep link 보존이 필요하면 `(request) => request.url` 사용. 미설정 시 `"/"` 로 redirect |
-| `restorePath` | `string` | `"/auth/restore"` | `<SessionRestore />` 를 마운트한 경로. 프록시가 자동으로 통과시키므로 `publicPaths` 에 넣지 않아도 된다 |
 
 #### 동작 방식
 
+`<SessionRestore />`는 반드시 `/auth/restore`에 마운트합니다.
+
 요청은 위에서부터 순서대로 판정됩니다.
 
-1. `restorePath` → 통과 (여기서 복구 경로로 보내면 무한 루프)
-2. bypass 경로 (기본 PWA/정적 리소스 + `bypassPaths`) → 통과
+1. `/auth/restore` → 통과 (여기서 복구 경로로 보내면 무한 루프)
+2. PWA·정적 리소스 경로(`/sw.js`, `/manifest.webmanifest`, `/icons/*` 등) → 통과
 3. `lemon_access_token` 이 있고 만료까지 60초 이상 → 통과
 4. — 여기부터는 만료된 요청 —
    `apiPaths` 매칭 → 공개 경로면 통과, 아니면 `401 { code: "UNAUTHORIZED" }`
 5. 비-GET 요청 (서버 액션 등) → 통과. 리다이렉트하면 액션 프로토콜이
    깨지므로, DAL 이 거부하게 둡니다
-6. `lemon_refresh_token` 있음 → `restorePath?next=<원래 경로>` 로 redirect.
+6. `lemon_refresh_token` 있음 → `/auth/restore?next=<원래 경로>` 로 redirect.
    **공개 경로도 포함입니다**
 7. 공개 경로 → 통과 (익명 방문자)
 8. 나머지 → `loginRedirectUrl` 을 담아 로그인 페이지로 redirect
@@ -277,7 +200,7 @@ export const config = {
 
 **프리페치 요청**: 다른 요청과 똑같이 처리합니다. 통과시키면 만료된 토큰으로
 페이지가 렌더되고 거기서 나온 redirect 가 라우터 캐시에 굳어, 어느 링크를 눌러도
-같은 곳으로 튀게 됩니다. 반면 프록시가 돌려주는 `restorePath` 리다이렉트는 굳어도
+같은 곳으로 튀게 됩니다. 반면 프록시가 돌려주는 복구 경로 리다이렉트는 굳어도
 해가 없습니다 — 복구 경로는 막다른 길이 아니라 세션을 되살리고 `next` 로
 되돌려 보내므로 목적지도 보존됩니다.
 
@@ -299,6 +222,16 @@ createAuthProxy({
 });
 ```
 
+### 0.9.x → 0.10.0 마이그레이션
+
+쓰이지 않던 API를 정리했습니다.
+
+- 제거: `requireAuth`, `verifyAccessToken`, `verifyAccessTokenString`, `/server`의 URL·쿠키 상수, `AccessTokenClaims`·`UserProfile` 타입
+- 제거: proxy의 `bypassPaths`·`restorePath` 옵션, `DEFAULT_AUTH_BYPASS_PATHS`·`DEFAULT_RESTORE_PATH`·`PROXY_AUTH_ERROR`
+- `getSession()`의 `clientId`가 필수가 됐습니다. 빈 값이면 승인 검사를 건너뛰던(fail-open) 동작이 `unapproved`로 바뀝니다.
+- `requireClient()`의 두 번째 인자는 옵션 객체만 받습니다.
+- `LOGIN_URL`·`PROFILE_PAGE_URL`로 URL을 직접 만들던 곳은 `/server`에서 `loginUrl()`·`profileUrl()`을 import해 씁니다.
+
 ### 0.8.x → 0.9.0 마이그레이션
 
 갱신 주체가 `<SessionRestore />` 하나로 통일되고, 실패 처리가 서버로
@@ -309,7 +242,7 @@ createAuthProxy({
 레이아웃에서 마운트와 import 를 지웁니다. 공개 경로의 만료 세션은 이제
 프록시가 복구 경로로 보내 처리합니다.
 
-**2. `publicPaths` 에서 복구 경로 제거** — `restorePath` 는 프록시가 자동으로
+**2. `publicPaths` 에서 복구 경로 제거** — `/auth/restore` 는 프록시가 자동으로
 통과시킵니다. 남겨둬도 해는 없지만 필요 없습니다.
 
 **3. `refreshTokenFromCookie` 제거** — 서버사이드 갱신 진입점이 사라졌습니다.
@@ -330,25 +263,6 @@ createAuthProxy({
 | 상황 | 응답 |
 |------|------|
 | 미인증 (access/refresh 모두 실패) | `401 { "code": "UNAUTHORIZED" }` |
-| 미승인 (`clientId` 미포함) | `403 { "code": "FORBIDDEN" }` |
-
-`PROXY_AUTH_ERROR` 상수와 `ProxyAuthErrorCode` 타입을 export합니다.
-
-```ts
-import { PROXY_AUTH_ERROR } from "@lemondouble/lemon-auth/proxy";
-import type { ProxyAuthErrorCode } from "@lemondouble/lemon-auth/proxy";
-
-const res = await fetch("/api/users");
-if (!res.ok) {
-  const data = (await res.json()) as { code: ProxyAuthErrorCode };
-  if (data.code === PROXY_AUTH_ERROR.UNAUTHORIZED) {
-    // 재로그인 유도
-  }
-  if (data.code === PROXY_AUTH_ERROR.FORBIDDEN) {
-    // "권한 없음" 표시
-  }
-}
-```
 
 `/api/*` 외의 경로(예: tRPC, GraphQL)도 JSON 응답을 받게 하려면 `apiPaths`에 추가합니다.
 
@@ -521,38 +435,9 @@ const ok = await refreshToken();
 
 ## 타입
 
-세 엔트리포인트 모두에서 타입을 import할 수 있습니다.
-
 ```ts
-import type { LemonUser, AccessTokenClaims } from "@lemondouble/lemon-auth/server";
+import type { LemonSession, LemonUser } from "@lemondouble/lemon-auth/server";
 import type { LemonUser } from "@lemondouble/lemon-auth/client";
-import type { LemonUser, AccessTokenClaims } from "@lemondouble/lemon-auth/proxy";
-```
-
-```ts
-interface LemonUser {
-  uid: string;
-  nickname: string;
-  profileImageUrl: string;
-  role: "user" | "admin";
-  approvedClients: string[];
-}
-
-interface AccessTokenClaims extends JWTPayload {
-  token_type: "access";
-  sub: string;
-  nickname: string;
-  profile_image_url: string;
-  role: "user" | "admin";
-  approved_clients: string[];
-}
-
-interface UserProfile {
-  uid: string;
-  nickname: string;
-  profile_image_url: string;
-  role: "user" | "admin";
-}
 ```
 
 ---
@@ -564,10 +449,7 @@ interface UserProfile {
 ### 1. proxy.ts — optimistic check
 
 ```ts
-import {
-  createAuthProxy,
-  DEFAULT_API_PATHS,
-} from "@lemondouble/lemon-auth/proxy";
+import { createAuthProxy } from "@lemondouble/lemon-auth/proxy";
 
 export default createAuthProxy({
   publicPaths: [
@@ -576,8 +458,6 @@ export default createAuthProxy({
     "/pending-approval",
     "/api/public/*",
   ],
-  bypassPaths: ["/workbox-*"],
-  apiPaths: DEFAULT_API_PATHS,
   loginRedirectUrl: (request) => request.url,
 });
 
@@ -589,8 +469,7 @@ export const config = {
 ```
 
 `loginRedirectUrl: (request) => request.url`은 로그인 후 사용자가 원래 요청한 path/query로 돌아오게 합니다.
-`apiPaths`에 매칭되는 보호 API는 인증 실패 시 redirect 대신 `401` JSON 응답을 반환합니다.
-기본 PWA 파일(`/sw.js`, `/manifest.webmanifest` 등)은 항상 bypass되며, 앱에서 추가로 생성하는 workbox 파일은 `bypassPaths`에 넣을 수 있습니다.
+`/api/*` 보호 API는 인증 실패 시 redirect 대신 `401` JSON 응답을 반환합니다.
 복구 경로(`/auth/restore`)는 프록시가 자동으로 통과시키므로 `publicPaths` 에 넣지 않습니다.
 
 사용자 DB 동기화 같은 작업은 **프록시가 아니라 DAL 에서** 하십시오. 프록시는
@@ -677,10 +556,12 @@ export function LoginButton() {
 ### 5. app/dashboard/page.tsx — 보호 페이지
 
 ```tsx
-import { requireAuth } from "@lemondouble/lemon-auth/server";
+import { requireClient } from "@lemondouble/lemon-auth/server";
 
 export default async function Dashboard() {
-  const user = await requireAuth();
+  const user = await requireClient(process.env.CLIENT_ID!, {
+    unapprovedRedirectTo: "/pending-approval",
+  });
   return <h1>{user.nickname}님의 대시보드</h1>;
 }
 ```

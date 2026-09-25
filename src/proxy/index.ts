@@ -13,7 +13,7 @@ import { isMockAuthEnabled } from "../mock.js";
  * 요청에서 돌기 때문에 쿠키의 exp 만 읽고, 네트워크 · DB · 서명 검증을
  * 하지 않는다. 보안 판단은 DAL(getSession / requireAuth)이 한다.
  *
- * 갱신 주체는 restorePath 에 마운트된 <SessionRestore /> 하나뿐이다.
+ * 갱신 주체는 RESTORE_PATH 에 마운트된 <SessionRestore /> 하나뿐이다.
  * 공개 경로도 refresh 쿠키가 남아 있으면 복구를 거치게 해서, 만료된 세션이
  * "로그아웃 상태로 렌더됐다가 뒤늦게 뒤집히는" 화면을 없앤다. (0.8.x 까지는
  * 이 몫을 레이아웃의 <AutoTokenRefresh /> 가 맡았는데, 복구 경로와 갱신
@@ -27,7 +27,7 @@ import { isMockAuthEnabled } from "../mock.js";
 
 const REFRESH_BUFFER_SECONDS = 60;
 
-export const DEFAULT_AUTH_BYPASS_PATHS = [
+const AUTH_BYPASS_PATHS = [
   "/sw.js",
   "/service-worker.js",
   "/manifest.webmanifest",
@@ -44,49 +44,35 @@ export const DEFAULT_AUTH_BYPASS_PATHS = [
 
 export const DEFAULT_API_PATHS = ["/api/*"];
 
-/** 앱이 <SessionRestore /> 를 마운트해야 하는 기본 경로. */
-export const DEFAULT_RESTORE_PATH = "/auth/restore";
-
-export const PROXY_AUTH_ERROR = {
-  UNAUTHORIZED: "UNAUTHORIZED",
-  FORBIDDEN: "FORBIDDEN",
-} as const;
-export type ProxyAuthErrorCode =
-  (typeof PROXY_AUTH_ERROR)[keyof typeof PROXY_AUTH_ERROR];
+/** 앱이 <SessionRestore /> 를 마운트해야 하는 경로. */
+const RESTORE_PATH = "/auth/restore";
 
 export type LoginRedirectUrl = string | ((request: NextRequest) => string);
 
 export interface AuthProxyOptions {
   /** 로그인 없이 열어둘 경로. 익명이면 통과, 만료 세션이면 복구를 거친다. */
   publicPaths?: string[];
-  /** 프록시 자체를 건너뛸 경로. 정적 파일 등. */
-  bypassPaths?: string[];
   /** 리다이렉트 대신 401 JSON 을 돌려줄 경로. 기본 `/api/*`. */
   apiPaths?: string[];
   loginRedirectUrl?: LoginRedirectUrl;
-  /** <SessionRestore /> 를 마운트한 경로. 기본 `/auth/restore`. */
-  restorePath?: string;
 }
 
 export function createAuthProxy(options: AuthProxyOptions = {}) {
   const {
     publicPaths = [],
-    bypassPaths = [],
     apiPaths = DEFAULT_API_PATHS,
     loginRedirectUrl,
-    restorePath = DEFAULT_RESTORE_PATH,
   } = options;
-  const effectiveBypassPaths = [...DEFAULT_AUTH_BYPASS_PATHS, ...bypassPaths];
 
   return async function proxy(request: NextRequest): Promise<NextResponse> {
     const { pathname } = request.nextUrl;
 
     // 복구 경로 자신은 항상 통과. 여기서 복구 경로로 보내면 무한 루프다.
-    if (pathname === restorePath) {
+    if (pathname === RESTORE_PATH) {
       return NextResponse.next();
     }
 
-    if (isPublicPath(pathname, effectiveBypassPaths)) {
+    if (isPublicPath(pathname, AUTH_BYPASS_PATHS)) {
       return NextResponse.next();
     }
 
@@ -110,7 +96,7 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
         return NextResponse.next();
       }
       return NextResponse.json(
-        { code: PROXY_AUTH_ERROR.UNAUTHORIZED },
+        { code: "UNAUTHORIZED" },
         { status: 401 }
       );
     }
@@ -126,7 +112,7 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
     // 캐시에 굳혀도 해가 없다 — 복구 경로는 스스로 세션을 되살리고
     // next 로 되돌려 보내므로 목적지가 보존된다.
     if (request.cookies.get(REFRESH_TOKEN_COOKIE)?.value) {
-      const restore = new URL(restorePath, request.url);
+      const restore = new URL(RESTORE_PATH, request.url);
       restore.searchParams.set("next", pathname + request.nextUrl.search);
       return NextResponse.redirect(restore);
     }

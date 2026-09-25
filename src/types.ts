@@ -21,10 +21,3 @@ export type LemonSession =
   | { type: "none" }
   | { type: "unapproved"; user: LemonUser }
   | { type: "authenticated"; user: LemonUser };
-
-export interface UserProfile {
-  uid: string;
-  nickname: string;
-  profile_image_url: string;
-  role: "user" | "admin";
-}

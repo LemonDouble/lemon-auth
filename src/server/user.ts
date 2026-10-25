@@ -2,6 +2,7 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import type { AccessTokenClaims, LemonSession, LemonUser } from "../types.js";
 import { AUTH_SERVER_URL } from "../constants.js";
+import { getMockUser } from "../mock.js";
 import { verifyAccessToken } from "./verify.js";
 
 function claimsToUser(claims: AccessTokenClaims): LemonUser {
@@ -15,6 +16,9 @@ function claimsToUser(claims: AccessTokenClaims): LemonUser {
 }
 
 export const getUser = cache(async (): Promise<LemonUser | null> => {
+  const mockUser = getMockUser();
+  if (mockUser) return mockUser;
+
   const claims = await verifyAccessToken();
   if (!claims) return null;
   return claimsToUser(claims);

@@ -3,15 +3,16 @@ import { cookies } from "next/headers";
 import type { AccessTokenClaims } from "../types.js";
 import { JWKS_URL, AUTH_SERVER_URL, ACCESS_TOKEN_COOKIE } from "../constants.js";
 import { isAccessTokenClaims } from "../claims.js";
-import { getMockAccessTokenClaims } from "../mock.js";
 import { warnAuth, errorCode } from "../log.js";
 
-const jwks = createRemoteJWKSet(new URL(JWKS_URL));
+// 키는 거의 바뀌지 않는다. 새 kid 는 캐시와 상관없이 다시 받고, 폐기한 키는 앱을 재배포해야 반영된다.
+const JWKS_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+const jwks = createRemoteJWKSet(new URL(JWKS_URL), {
+  cacheMaxAge: JWKS_CACHE_MAX_AGE_MS,
+});
 
 export async function verifyAccessToken(): Promise<AccessTokenClaims | null> {
-  const mockClaims = getMockAccessTokenClaims();
-  if (mockClaims) return mockClaims;
-
   const cookieStore = await cookies();
   const token = cookieStore.get(ACCESS_TOKEN_COOKIE)?.value;
   if (!token) return null;

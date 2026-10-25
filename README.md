@@ -15,7 +15,7 @@ pnpm add @lemondouble/lemon-auth
 | 경로 | 환경 | 용도 |
 |------|------|------|
 | `@lemondouble/lemon-auth/server` | Server Components, Route Handlers, Server Actions | 유저 조회, 승인 체크, URL 헬퍼 |
-| `@lemondouble/lemon-auth/client` | Client Components | AuthProvider, 세션 복구, 로그인/로그아웃 |
+| `@lemondouble/lemon-auth/client` | Client Components | 로그인/로그아웃, 토큰 갱신 |
 | `@lemondouble/lemon-auth/proxy` | `proxy.ts` | 쿠키 기반 optimistic check |
 
 ## 인증 흐름
@@ -33,6 +33,8 @@ pnpm add @lemondouble/lemon-auth
 ### `getUser()`
 
 쿠키의 `lemon_access_token`을 JWKS(ES256)로 검증하고 `LemonUser | null`을 반환합니다. React `cache()`로 감싸져 있어 같은 요청 안에서는 한 번만 검증합니다.
+
+JWKS는 인스턴스마다 24시간 캐시합니다. 새 키(`kid`)는 바로 다시 받지만, auth 서버에서 폐기한 키는 사용처 앱을 재배포해야 바로 반영됩니다.
 
 ```ts
 interface LemonUser {
@@ -76,7 +78,6 @@ Client 엔트리포인트의 같은 함수를 Server Component에서 쓸 수 있
 |------|--------|------|
 | `publicPaths` | `[]` | 로그인 없이 열어둘 경로. `*`로 끝나면 prefix 매칭 |
 | `apiPaths` | `["/api/*"]` | 인증 실패 시 redirect 대신 `401 { "code": "UNAUTHORIZED" }`를 반환할 경로 |
-| `loginRedirectUrl` | `undefined` | 로그인 후 돌아올 URL. 문자열 또는 `(request) => string`. 미설정 시 `"/"`로 redirect |
 
 요청은 위에서부터 순서대로 판정됩니다.
 
@@ -86,13 +87,9 @@ Client 엔트리포인트의 같은 함수를 Server Component에서 쓸 수 있
 4. 비-GET 요청(서버 액션 등) → 통과 (DAL이 거부)
 5. refresh token 있음 → 복구 화면 응답 (공개 경로 포함)
 6. 공개 경로 → 통과
-7. 나머지 → 로그인 페이지
+7. 나머지 → 로그인 페이지 (로그인하면 원래 주소로 돌아옴)
 
 앱 안에서 링크로 이동할 때(소프트 내비게이션)도 복구 화면을 받으면, Next 라우터가 같은 주소로 전체 페이지 이동을 해서 복구가 이어집니다.
-
-### 0.10.x → 0.11.0 마이그레이션
-
-- `<SessionRestore>`를 제거했습니다. 프록시가 복구 화면을 직접 응답하므로 `app/auth/restore/page.tsx`를 삭제합니다.
 
 ---
 
@@ -100,11 +97,17 @@ Client 엔트리포인트의 같은 함수를 Server Component에서 쓸 수 있
 
 | API | 설명 |
 |-----|------|
-| `<AuthProvider user>` / `useAuth()` | Server Component에서 받은 `user`를 Client Component에 전달합니다. `useAuth()`는 `{ user, isAuthenticated }`를 반환합니다 |
 | `loginUrl(redirectUrl)` | Google 로그인 URL을 만듭니다. `redirectUrl`은 `https://` + `*.lemondouble.com`만 허용하며, 아니면 throw합니다 |
 | `profileUrl(redirectUrl?)` | auth 서버 프로필 편집 페이지 URL을 만듭니다 |
 | `logout()` | refresh token을 폐기하고 쿠키를 지웁니다. 성공 여부를 `boolean`으로 반환합니다 |
 | `refreshToken()` | 즉시 갱신합니다. 승인 직후 새 `approved_clients`를 반영할 때 씁니다 |
+
+---
+
+## 0.11.x → 0.12.0 마이그레이션
+
+- `AuthProvider`와 `useAuth`를 제거했습니다. 레이아웃의 `<AuthProvider>`를 지웁니다. user가 필요하면 Server Component에서 `getUser()`를 호출합니다.
+- `createAuthProxy`의 `loginRedirectUrl` 옵션을 제거했습니다. 프록시는 항상 원래 주소로 돌아오게 하므로 `proxy.ts`에서 이 줄을 지웁니다.
 
 ---
 
@@ -117,7 +120,6 @@ import { createAuthProxy } from "@lemondouble/lemon-auth/proxy";
 
 export default createAuthProxy({
   publicPaths: ["/", "/pending-approval", "/api/public/*"],
-  loginRedirectUrl: (request) => request.url,
 });
 
 export const config = {
@@ -126,26 +128,6 @@ export const config = {
   ],
 };
 ```
-
-### `app/layout.tsx`
-
-```tsx
-import { getUser } from "@lemondouble/lemon-auth/server";
-import { AuthProvider } from "@lemondouble/lemon-auth/client";
-
-export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const user = await getUser();
-  return (
-    <html lang="ko">
-      <body>
-        <AuthProvider user={user}>{children}</AuthProvider>
-      </body>
-    </html>
-  );
-}
-```
-
-레이아웃은 소프트 네비게이션에서 다시 렌더되지 않으므로 `user`를 표시용으로만 씁니다. 접근 제어는 페이지에서 합니다.
 
 ### 보호 페이지
 
@@ -159,6 +141,8 @@ export default async function Dashboard() {
   return <h1>{user.nickname}님의 대시보드</h1>;
 }
 ```
+
+레이아웃은 소프트 내비게이션에서 다시 렌더되지 않으므로, 접근 제어는 레이아웃이 아니라 페이지에서 합니다.
 
 ### 로그인 · 로그아웃 버튼
 
@@ -194,6 +178,7 @@ auth 서버 없이 로그인 상태를 재현하려면 `.env.local`에 설정합
 NEXT_PUBLIC_LEMON_AUTH_MOCK_USER='{"uid":"local-user","nickname":"Local User","profileImageUrl":"","role":"admin","approvedClients":["*"]}'
 ```
 
+- 다섯 필드를 모두 camelCase로 적어야 합니다. 하나라도 빠지거나 형식이 다르면 에러가 납니다.
 - 서버 API는 mock user를 로그인 유저로 반환합니다. `approvedClients`의 `"*"`는 모든 `clientId`를 승인합니다.
 - 프록시는 모든 요청을 통과시킵니다.
 - `loginUrl()`은 인자를, `profileUrl()`은 인자(없으면 `"/"`)를 그대로 반환하고, `logout()`·`refreshToken()`은 no-op 후 `true`를 반환합니다.

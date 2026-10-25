@@ -29,24 +29,17 @@ const AUTH_BYPASS_PATHS = [
   "/icons/*",
 ];
 
-export const DEFAULT_API_PATHS = ["/api/*"];
-
-export type LoginRedirectUrl = string | ((request: NextRequest) => string);
+const DEFAULT_API_PATHS = ["/api/*"];
 
 export interface AuthProxyOptions {
   /** 로그인 없이 열어둘 경로. 익명이면 통과, 만료 세션이면 복구를 거친다. */
   publicPaths?: string[];
   /** 리다이렉트 대신 401 JSON 을 돌려줄 경로. 기본 `/api/*`. */
   apiPaths?: string[];
-  loginRedirectUrl?: LoginRedirectUrl;
 }
 
 export function createAuthProxy(options: AuthProxyOptions = {}) {
-  const {
-    publicPaths = [],
-    apiPaths = DEFAULT_API_PATHS,
-    loginRedirectUrl,
-  } = options;
+  const { publicPaths = [], apiPaths = DEFAULT_API_PATHS } = options;
 
   return async function proxy(request: NextRequest): Promise<NextResponse> {
     const { pathname } = request.nextUrl;
@@ -95,7 +88,7 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
       return NextResponse.next();
     }
 
-    return redirectToLogin(request, loginRedirectUrl);
+    return redirectToLogin(request);
   };
 }
 
@@ -125,18 +118,9 @@ function isPublicPath(pathname: string, publicPaths: string[]): boolean {
   });
 }
 
-function redirectToLogin(
-  request: NextRequest,
-  loginRedirectUrl: LoginRedirectUrl | undefined
-): NextResponse {
-  const redirectUrl =
-    typeof loginRedirectUrl === "function"
-      ? loginRedirectUrl(request)
-      : loginRedirectUrl;
-
-  if (redirectUrl) {
-    const url = `${LOGIN_URL}?redirect_url=${encodeURIComponent(redirectUrl)}`;
-    return NextResponse.redirect(new URL(url, request.url));
-  }
-  return NextResponse.redirect(new URL("/", request.url));
+/** 로그인을 마치면 auth 서버가 원래 가려던 주소로 돌려보낸다. */
+function redirectToLogin(request: NextRequest): NextResponse {
+  return NextResponse.redirect(
+    `${LOGIN_URL}?redirect_url=${encodeURIComponent(request.url)}`
+  );
 }

@@ -1,5 +1,4 @@
 import { defineConfig } from "tsup";
-import { readFileSync, writeFileSync } from "fs";
 
 export default defineConfig({
   entry: {
@@ -14,9 +13,4 @@ export default defineConfig({
   external: ["next", "react", "react-dom"],
   loader: { ".svg": "text" },
   tsconfig: "tsconfig.build.json",
-  onSuccess() {
-    const path = "dist/client/index.js";
-    const content = readFileSync(path, "utf-8");
-    writeFileSync(path, `"use client";\n${content}`);
-  },
 });

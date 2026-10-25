@@ -5,9 +5,10 @@ import {
   LOGIN_URL,
 } from "../constants.js";
 import { isMockAuthEnabled } from "../mock.js";
+import { restorePageResponse } from "./restore-page.js";
 
 /**
- * 쿠키 exp 만 보고 라우팅만 한다. 서명 검증은 DAL, 갱신은 <SessionRestore /> 가 맡는다.
+ * 쿠키 exp 만 보고 라우팅만 한다. 서명 검증은 DAL, 갱신은 복구 화면의 브라우저 스크립트가 맡는다.
  * 여기에 네트워크 호출(갱신)을 넣지 말 것 — 프리페치마다 동시 갱신되어 refresh 회전 경쟁이 난다.
  */
 
@@ -30,9 +31,6 @@ const AUTH_BYPASS_PATHS = [
 
 export const DEFAULT_API_PATHS = ["/api/*"];
 
-/** 앱이 <SessionRestore /> 를 마운트해야 하는 경로. */
-const RESTORE_PATH = "/auth/restore";
-
 export type LoginRedirectUrl = string | ((request: NextRequest) => string);
 
 export interface AuthProxyOptions {
@@ -52,11 +50,6 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
 
   return async function proxy(request: NextRequest): Promise<NextResponse> {
     const { pathname } = request.nextUrl;
-
-    // 복구 경로 자신은 항상 통과. 여기서 복구 경로로 보내면 무한 루프다.
-    if (pathname === RESTORE_PATH) {
-      return NextResponse.next();
-    }
 
     if (isPublicPath(pathname, AUTH_BYPASS_PATHS)) {
       return NextResponse.next();
@@ -92,11 +85,10 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
       return NextResponse.next();
     }
 
-    // refresh 가 남아 있으면 브라우저가 갱신하도록 복구 경로로 보낸다. 공개 경로도 포함.
+    // refresh 가 남아 있으면 브라우저가 갱신하도록 복구 화면을 바로 응답한다. 공개 경로도 포함.
+    // 소프트 내비게이션(RSC 요청)이 HTML 을 받으면 Next 라우터가 같은 주소로 전체 페이지 이동을 한다.
     if (request.cookies.get(REFRESH_TOKEN_COOKIE)?.value) {
-      const restore = new URL(RESTORE_PATH, request.url);
-      restore.searchParams.set("next", pathname + request.nextUrl.search);
-      return NextResponse.redirect(restore);
+      return restorePageResponse();
     }
 
     if (isPublic) {

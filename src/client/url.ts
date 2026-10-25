@@ -35,27 +35,18 @@ export async function logout(): Promise<boolean> {
   }
 }
 
-export type RefreshSessionResult = "ok" | "unauthorized" | "unavailable";
-
-/** "unavailable" 은 서버·네트워크 사정이라 세션이 죽었다고 판단하면 안 된다. */
-export async function refreshSession(): Promise<RefreshSessionResult> {
-  if (isMockAuthEnabled()) return "ok";
+export async function refreshToken(): Promise<boolean> {
+  if (isMockAuthEnabled()) return true;
 
   try {
     const res = await fetch(REFRESH_URL, {
       method: "POST",
       credentials: "include",
     });
-    if (res.ok) return "ok";
-    if (res.status === 401 || res.status === 403) return "unauthorized";
-    return "unavailable";
+    return res.ok;
   } catch {
-    return "unavailable";
+    return false;
   }
-}
-
-export async function refreshToken(): Promise<boolean> {
-  return (await refreshSession()) === "ok";
 }
 
 function assertValidLoginRedirectUrl(redirectUrl: string): void {

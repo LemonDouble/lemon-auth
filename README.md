@@ -22,8 +22,8 @@ pnpm add @lemondouble/lemon-auth
 
 - 로그인하면 auth 서버가 `.lemondouble.com` 도메인에 `lemon_access_token`(30분)과 `lemon_refresh_token`(30일) 쿠키를 설정합니다.
 - 프록시는 쿠키의 `exp`만 보고 라우팅합니다. access token이 만료됐고 refresh token이 남아 있으면 복구 화면을 바로 응답합니다.
-- 복구 화면이 브라우저에서 갱신한 뒤 같은 주소를 새로고침합니다. 화면에는 [lemon-design-system](https://github.com/LemonDouble/lemon-design-system)의 LD 캐릭터 일러스트 세 장 중 하나가 무작위로 나옵니다.
-- auth 서버에 연결하지 못하면 실패 일러스트와 "다시 시도" 버튼을 보여줍니다. 401·403이면 세션이 끝난 것이므로 새로고침해서 로그인으로 보냅니다.
+- 복구 화면이 브라우저에서 갱신한 뒤 같은 주소를 새로고침합니다. 화면은 [lemon-design-system](https://github.com/LemonDouble/lemon-design-system)의 엠블럼과 스피너로 구성됩니다.
+- auth 서버에 연결하지 못하면 "다시 시도" 버튼을 보여줍니다. 401·403이면 세션이 끝난 것이므로 새로고침해서 로그인으로 보냅니다.
 - 서명 검증과 승인 판단은 DAL(`getUser` / `getSession` / `requireClient`)이 합니다. 권한 판단은 반드시 DAL에서 합니다.
 
 ---

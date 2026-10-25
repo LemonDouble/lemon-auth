@@ -12,7 +12,7 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   external: ["next", "react", "react-dom"],
-  loader: { ".webp": "dataurl" },
+  loader: { ".svg": "text" },
   tsconfig: "tsconfig.build.json",
   onSuccess() {
     const path = "dist/client/index.js";

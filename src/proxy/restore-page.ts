@@ -52,7 +52,7 @@ body {
 :focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
 [hidden] { display: none !important; }
 main { display: flex; flex-direction: column; align-items: center; gap: 28px; }
-.emblem { width: 120px; color: var(--color-primary); }
+.emblem { width: 120px; color: var(--color-fg); }
 .emblem svg { display: block; width: 100%; height: auto; }
 .state { display: flex; flex-direction: column; align-items: center; gap: 16px; }
 .title { color: var(--color-fg); font-size: 15px; font-weight: 700; line-height: 1.4; }

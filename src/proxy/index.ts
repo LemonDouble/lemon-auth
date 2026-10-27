@@ -57,6 +57,11 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
       return NextResponse.next();
     }
 
+    // CLI 처럼 쿠키 없이 Bearer 로 오는 요청. 갱신은 클라이언트가 직접 하므로 검증만 DAL 에 맡긴다.
+    if (request.headers.get("authorization")?.toLowerCase().startsWith("bearer ")) {
+      return NextResponse.next();
+    }
+
     // --- 여기부터는 access token 이 없거나 만료가 임박한 요청 ---
 
     const isPublic = isPublicPath(pathname, publicPaths);

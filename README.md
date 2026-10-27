@@ -25,6 +25,7 @@ pnpm add @lemondouble/lemon-auth
 - 복구 화면이 브라우저에서 갱신한 뒤 같은 주소를 새로고침합니다. 화면은 [lemon-design-system](https://github.com/LemonDouble/lemon-design-system)의 엠블럼과 스피너로 구성됩니다.
 - auth 서버에 연결하지 못하면 "다시 시도" 버튼을 보여줍니다. 401·403이면 세션이 끝난 것이므로 새로고침해서 로그인으로 보냅니다.
 - 서명 검증과 승인 판단은 DAL(`getUser` / `getSession` / `requireClient`)이 합니다. 권한 판단은 반드시 DAL에서 합니다.
+- CLI처럼 쿠키가 없는 클라이언트는 `Authorization: Bearer <access token>` 헤더로 보냅니다. 토큰은 auth 서버의 [Device Authorization Grant (RFC 8628)](https://www.rfc-editor.org/rfc/rfc8628)로 받습니다. 쿠키가 있으면 쿠키를 우선합니다.
 
 ---
 
@@ -32,7 +33,9 @@ pnpm add @lemondouble/lemon-auth
 
 ### `getUser()`
 
-쿠키의 `lemon_access_token`을 JWKS(ES256)로 검증하고 `LemonUser | null`을 반환합니다. React `cache()`로 감싸져 있어 같은 요청 안에서는 한 번만 검증합니다.
+쿠키의 `lemon_access_token`(없으면 Bearer 헤더)을 JWKS(ES256)로 검증하고 `LemonUser | null`을 반환합니다. React `cache()`로 감싸져 있어 같은 요청 안에서는 한 번만 검증합니다.
+
+토큰은 [RFC 9068](https://www.rfc-editor.org/rfc/rfc9068) 형식이며, `iss`와 헤더의 `typ: at+jwt`를 검증합니다. `approvedClients`는 토큰의 `aud`에서 auth 서버 주소를 뺀 값입니다.
 
 JWKS는 인스턴스마다 24시간 캐시합니다. 새 키(`kid`)는 바로 다시 받지만, auth 서버에서 폐기한 키는 사용처 앱을 재배포해야 바로 반영됩니다.
 
@@ -83,11 +86,12 @@ Client 엔트리포인트의 같은 함수를 Server Component에서 쓸 수 있
 
 1. PWA·정적 리소스(`/sw.js`, `/manifest.webmanifest`, `/icons/*` 등) → 통과
 2. access token 만료까지 60초 이상 → 통과
-3. `apiPaths` → 공개 경로면 통과, 아니면 401
-4. 비-GET 요청(서버 액션 등) → 통과 (DAL이 거부)
-5. refresh token 있음 → 복구 화면 응답 (공개 경로 포함)
-6. 공개 경로 → 통과
-7. 나머지 → 로그인 페이지 (로그인하면 원래 주소로 돌아옴)
+3. `Authorization: Bearer` 헤더 있음 → 통과 (DAL이 검증)
+4. `apiPaths` → 공개 경로면 통과, 아니면 401
+5. 비-GET 요청(서버 액션 등) → 통과 (DAL이 거부)
+6. refresh token 있음 → 복구 화면 응답 (공개 경로 포함)
+7. 공개 경로 → 통과
+8. 나머지 → 로그인 페이지 (로그인하면 원래 주소로 돌아옴)
 
 앱 안에서 링크로 이동할 때(소프트 내비게이션)도 복구 화면을 받으면, Next 라우터가 같은 주소로 전체 페이지 이동을 해서 복구가 이어집니다.
 
@@ -100,9 +104,14 @@ Client 엔트리포인트의 같은 함수를 Server Component에서 쓸 수 있
 | `loginUrl(redirectUrl)` | Google 로그인 URL을 만듭니다. `redirectUrl`은 `https://` + `*.lemondouble.com`만 허용하며, 아니면 throw합니다 |
 | `profileUrl(redirectUrl?)` | auth 서버 프로필 편집 페이지 URL을 만듭니다 |
 | `logout()` | refresh token을 폐기하고 쿠키를 지웁니다. 성공 여부를 `boolean`으로 반환합니다 |
-| `refreshToken()` | 즉시 갱신합니다. 승인 직후 새 `approved_clients`를 반영할 때 씁니다 |
+| `refreshToken()` | 즉시 갱신합니다. 승인 직후 새 승인 목록(`aud`)을 반영할 때 씁니다 |
 
 ---
+
+## 0.12.x → 0.13.0 마이그레이션
+
+- auth 서버가 발급하는 access token 형식이 [RFC 9068](https://www.rfc-editor.org/rfc/rfc9068)로 바뀌었습니다 (`typ: at+jwt`, `aud`에 승인 목록, `approved_clients`·`token_type` 제거). 0.13.0은 새 형식만 받고, 0.12.x는 새 형식을 받지 못하므로 auth 서버 배포 직후 버전을 올립니다.
+- 앱 코드는 바꿀 필요가 없습니다. `LemonUser`와 mock user 형식은 그대로입니다.
 
 ## 0.11.x → 0.12.0 마이그레이션
 

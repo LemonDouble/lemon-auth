@@ -1,5 +1,5 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import type { AccessTokenClaims } from "../types.js";
 import { JWKS_URL, AUTH_SERVER_URL, ACCESS_TOKEN_COOKIE } from "../constants.js";
 import { isAccessTokenClaims } from "../claims.js";
@@ -13,13 +13,14 @@ const jwks = createRemoteJWKSet(new URL(JWKS_URL), {
 });
 
 export async function verifyAccessToken(): Promise<AccessTokenClaims | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get(ACCESS_TOKEN_COOKIE)?.value;
+  const token = await readAccessToken();
   if (!token) return null;
 
   try {
+    // aud 는 여기서 검사하지 않는다. 승인되지 않은 유저를 로그인 실패가 아니라 unapproved 로 구분해야 해서다.
     const { payload } = await jwtVerify(token, jwks, {
       issuer: AUTH_SERVER_URL,
+      typ: "at+jwt",
       // 발급자(자택 k3s)와 검증자(Vercel)의 시계 어긋남 허용
       clockTolerance: 10,
     });
@@ -34,4 +35,18 @@ export async function verifyAccessToken(): Promise<AccessTokenClaims | null> {
     }
     return null;
   }
+}
+
+// 브라우저는 쿠키로, CLI 처럼 쿠키가 없는 클라이언트는 Authorization 헤더로 보낸다 (RFC 6750 §2.1).
+async function readAccessToken(): Promise<string | undefined> {
+  const cookieStore = await cookies();
+  const cookieToken = cookieStore.get(ACCESS_TOKEN_COOKIE)?.value;
+  if (cookieToken) return cookieToken;
+
+  return readBearerToken((await headers()).get("authorization"));
+}
+
+function readBearerToken(authorization: string | null): string | undefined {
+  const match = authorization?.match(/^Bearer ([A-Za-z0-9\-._~+/]+=*)$/i);
+  return match?.[1];
 }

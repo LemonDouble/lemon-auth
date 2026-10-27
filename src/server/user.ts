@@ -11,7 +11,7 @@ function claimsToUser(claims: AccessTokenClaims): LemonUser {
     nickname: claims.nickname,
     profileImageUrl: claims.profile_image_url,
     role: claims.role,
-    approvedClients: claims.approved_clients,
+    approvedClients: claims.aud.filter((audience) => audience !== AUTH_SERVER_URL),
   };
 }
 

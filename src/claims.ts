@@ -5,13 +5,13 @@ export function isAccessTokenClaims(
   payload: JWTPayload
 ): payload is AccessTokenClaims {
   return (
-    payload.token_type === "access" &&
     typeof payload.sub === "string" &&
+    Array.isArray(payload.aud) &&
+    payload.aud.every((audience) => typeof audience === "string") &&
+    typeof payload.client_id === "string" &&
     typeof payload.nickname === "string" &&
     typeof payload.profile_image_url === "string" &&
-    (payload.role === "user" || payload.role === "admin") &&
-    Array.isArray(payload.approved_clients) &&
-    payload.approved_clients.every((clientId) => typeof clientId === "string")
+    (payload.role === "user" || payload.role === "admin")
   );
 }
 

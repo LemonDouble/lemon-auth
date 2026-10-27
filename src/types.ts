@@ -1,12 +1,13 @@
 import type { JWTPayload } from "jose";
 
+/** RFC 9068 access token. `aud` 는 auth 서버와 이 유저가 승인받은 client 들이다. */
 export interface AccessTokenClaims extends JWTPayload {
-  token_type: "access";
   sub: string;
+  aud: string[];
+  client_id: string;
   nickname: string;
   profile_image_url: string;
   role: "user" | "admin";
-  approved_clients: string[];
 }
 
 export interface LemonUser {

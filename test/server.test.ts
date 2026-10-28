@@ -38,9 +38,8 @@ afterEach(() => {
   delete process.env.LEMON_AUTH_KEEP_ACCESS_TOKEN;
 });
 
-/** 세션 쿠키 안의 ID Token 은 받을 때 이미 검증했으므로, 여기서는 서명 없는 토큰으로 충분하다. */
 async function signIn(claims: Record<string, unknown>, session: Partial<StoredSession> = {}) {
-  const idToken = new UnsecuredJWT({ name: "레몬", updated_at: 1000, groups: [], ...claims }).setSubject("user-1").encode();
+  const idToken = await fake.op!.signIdToken("user-1", { name: "레몬", updated_at: 1000, groups: [], ...claims });
   fake.cookies.set(
     SESSION_COOKIE,
     await sealSession({ refreshToken: "r", idToken, accessTokenExpiresAt: nowSeconds() + 600, ...session })
@@ -67,6 +66,36 @@ describe("getSession", () => {
   it("access token 이 만료된 세션은 로그인 전 상태로 본다", async () => {
     await signIn({}, { accessTokenExpiresAt: nowSeconds() - 1 });
     expect(await getSession()).toEqual({ type: "none" });
+  });
+
+  describe("쿠키 키를 가진 사람이 꾸민 세션", () => {
+    async function sealForged(idToken: string) {
+      fake.cookies.set(
+        SESSION_COOKIE,
+        await sealSession({ refreshToken: "r", idToken, accessTokenExpiresAt: nowSeconds() + 600 })
+      );
+    }
+
+    it("auth 서버 서명이 없는 ID Token 은 받지 않는다", async () => {
+      const unsigned = new UnsecuredJWT({ name: "레몬", groups: ["admin"] })
+        .setSubject("user-1")
+        .setIssuer(ISSUER)
+        .setAudience(CLIENT_ID)
+        .setExpirationTime("30m")
+        .encode();
+      await sealForged(unsigned);
+      expect(await getSession()).toEqual({ type: "none" });
+    });
+
+    it("다른 앱에 발급한 ID Token 은 받지 않는다", async () => {
+      await sealForged(await fake.op!.signIdToken("user-1", { groups: ["admin"] }, { aud: OTHER_CLIENT_ID }));
+      expect(await getSession()).toEqual({ type: "none" });
+    });
+
+    it("만료된 ID Token 은 받지 않는다 (로그 등에서 얻은 예전 토큰)", async () => {
+      await sealForged(await fake.op!.signIdToken("user-1", { groups: ["admin"] }, { exp: nowSeconds() - 60 }));
+      expect(await getSession()).toEqual({ type: "none" });
+    });
   });
 
   it("mock 모드에서는 가짜 사용자를 돌려준다", async () => {

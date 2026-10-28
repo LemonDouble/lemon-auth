@@ -108,12 +108,19 @@ describe("verifyBearerToken", () => {
   it("이 앱이 aud 에 있는 access token 을 받는다", async () => {
     const token = await fake.op!.signAccessToken(user, { aud: [OTHER_CLIENT_ID, CLIENT_ID] });
     expect(await verifyBearerToken(bearer(token))).toEqual({
+      kind: "user",
       sub: "user-1",
       clientId: CLIENT_ID,
       scope: ["openid", "profile", "email"],
       groups: ["admin"],
       isAdmin: true,
     });
+  });
+
+  it("사용자 없이 프로그램이 받은 토큰은 service 로 구분한다", async () => {
+    const service = { sub: OTHER_CLIENT_ID, name: "", groups: [] };
+    const token = await fake.op!.signAccessToken(service, { clientId: OTHER_CLIENT_ID });
+    expect(await verifyBearerToken(bearer(token))).toMatchObject({ kind: "service", sub: OTHER_CLIENT_ID, clientId: OTHER_CLIENT_ID, isAdmin: false });
   });
 
   it("다른 앱에 발급한 토큰, ID Token, 만료된 토큰은 거부한다", async () => {

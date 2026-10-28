@@ -38,8 +38,8 @@ export async function createFakeOp() {
     id_token_signing_alg_values_supported: ["RS256"],
   };
 
-  async function signAccessToken(user: FakeUser, overrides: { aud?: string[]; typ?: string; exp?: number } = {}) {
-    return new SignJWT({ client_id: CLIENT_ID, scope: "openid profile email", groups: user.groups })
+  async function signAccessToken(user: FakeUser, overrides: { aud?: string[]; typ?: string; exp?: number; clientId?: string } = {}) {
+    return new SignJWT({ client_id: overrides.clientId ?? CLIENT_ID, scope: "openid profile email", groups: user.groups })
       .setProtectedHeader({ alg: "RS256", kid, typ: overrides.typ ?? "at+jwt" })
       .setIssuer(ISSUER)
       .setSubject(user.sub)

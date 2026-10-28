@@ -1,11 +1,11 @@
 {
   "name": "@lemondouble/lemon-auth",
-  "version": "0.13.0",
+  "version": "1.0.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/LemonDouble/lemon-auth"
   },
-  "description": "*.lemondouble.com 서비스를 위한 인증 라이브러리",
+  "description": "*.lemondouble.com 서비스를 위한 OpenID Connect 로그인 라이브러리",
   "type": "module",
   "exports": {
     "./server": {
@@ -19,6 +19,10 @@
     "./proxy": {
       "types": "./dist/proxy/index.d.ts",
       "import": "./dist/proxy/index.js"
+    },
+    "./routes": {
+      "types": "./dist/routes/index.d.ts",
+      "import": "./dist/routes/index.js"
     }
   },
   "files": [
@@ -28,6 +32,7 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "prepublishOnly": "pnpm run build"
   },
   "packageManager": "pnpm@10.25.0",
@@ -36,13 +41,15 @@
     "react": ">=19.0.0"
   },
   "dependencies": {
-    "jose": "^6.2.2"
+    "jose": "^6.2.2",
+    "openid-client": "^6.8.8"
   },
   "keywords": [
     "auth",
     "lemondouble",
     "next.js",
-    "jwt"
+    "oidc",
+    "openid-connect"
   ],
   "author": "lemondouble",
   "license": "MIT",
@@ -50,6 +57,7 @@
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "tsup": "^8.5.1",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.5"
   }
 }

@@ -1,29 +1,20 @@
 import type { JWTPayload } from "jose";
-import type { AccessTokenClaims, LemonUser } from "./types.js";
+import type { LemonUser } from "./types.js";
 
-export function isAccessTokenClaims(
-  payload: JWTPayload
-): payload is AccessTokenClaims {
-  return (
-    typeof payload.sub === "string" &&
-    Array.isArray(payload.aud) &&
-    payload.aud.every((audience) => typeof audience === "string") &&
-    typeof payload.client_id === "string" &&
-    typeof payload.nickname === "string" &&
-    typeof payload.profile_image_url === "string" &&
-    (payload.role === "user" || payload.role === "admin")
-  );
+export function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
-export function isLemonUser(value: unknown): value is LemonUser {
-  if (typeof value !== "object" || value === null) return false;
-  const user = value as Record<string, unknown>;
-  return (
-    typeof user.uid === "string" &&
-    typeof user.nickname === "string" &&
-    typeof user.profileImageUrl === "string" &&
-    (user.role === "user" || user.role === "admin") &&
-    Array.isArray(user.approvedClients) &&
-    user.approvedClients.every((clientId) => typeof clientId === "string")
-  );
+/** 앱이 요청하는 scope 는 openid profile email 이라 name, updated_at 은 항상 온다. */
+export function userFromIdTokenClaims(claims: JWTPayload): LemonUser {
+  const groups = isStringArray(claims.groups) ? claims.groups : [];
+  return {
+    sub: claims.sub ?? "",
+    name: typeof claims.name === "string" ? claims.name : "",
+    picture: typeof claims.picture === "string" ? claims.picture : null,
+    email: typeof claims.email === "string" ? claims.email : null,
+    groups,
+    isAdmin: groups.includes("admin"),
+    updatedAt: typeof claims.updated_at === "number" ? claims.updated_at : 0,
+  };
 }

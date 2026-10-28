@@ -1,3 +1,4 @@
-export { getUser, getSession, requireClient } from "./user.js";
-export { loginUrl, profileUrl } from "../client/url.js";
-export type { LemonSession, LemonUser } from "../types.js";
+export { getSession, requireSession, requireAdmin, getAccessToken } from "./session.js";
+export { verifyBearerToken } from "./bearer.js";
+export { loginUrl, logoutUrl, profileUrl } from "../client/url.js";
+export type { AccessToken, BearerToken, LemonSession, LemonUser } from "../types.js";

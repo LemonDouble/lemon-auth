@@ -1,9 +1,11 @@
-export const AUTH_SERVER_URL = "https://auth.lemondouble.com";
-export const JWKS_URL = `${AUTH_SERVER_URL}/.well-known/jwks.json`;
-export const LOGIN_URL = `${AUTH_SERVER_URL}/api/oauth2/google/login`;
-export const REFRESH_URL = `${AUTH_SERVER_URL}/api/token/refresh`;
-export const LOGOUT_URL = `${AUTH_SERVER_URL}/api/token/logout`;
-export const PROFILE_PAGE_URL = `${AUTH_SERVER_URL}/profile`;
+export const DEFAULT_ISSUER = "https://auth.lemondouble.com";
+export const SCOPE = "openid profile email";
 
-export const ACCESS_TOKEN_COOKIE = "lemon_access_token";
-export const REFRESH_TOKEN_COOKIE = "lemon_refresh_token";
+export const SESSION_COOKIE = "__Host-lemon_auth";
+export const LOGIN_TRANSACTION_COOKIE = "__Host-lemon_auth_tx";
+
+/** 앱의 `app/auth/[...lemon]/route.ts` 가 받는 경로 */
+export const AUTH_ROUTE_PREFIX = "/auth/";
+export const CALLBACK_PATH = "/auth/callback";
+export const LOGGED_OUT_PATH = "/auth/logged-out";
+export const PROFILE_RETURN_PATH = "/auth/profile-return";

@@ -28,7 +28,8 @@ export async function unsealCookieValue(value: string | undefined): Promise<JWTP
   }
 }
 
-export function setCookie(response: NextResponse, name: string, value: string, maxAgeSeconds: number): void {
+/** maxAgeSeconds 를 주지 않으면 브라우저를 닫을 때 사라지는 쿠키가 된다. */
+export function setCookie(response: NextResponse, name: string, value: string, maxAgeSeconds?: number): void {
   response.cookies.set(name, value, { ...COOKIE_ATTRIBUTES, maxAge: maxAgeSeconds });
 }
 

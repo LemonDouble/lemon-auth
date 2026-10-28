@@ -1,5 +1,11 @@
+import { isbot } from "isbot";
 import { NextResponse, type NextRequest } from "next/server";
-import { AUTH_ROUTE_PREFIX, SESSION_COOKIE } from "../constants.js";
+import {
+  AUTH_ROUTE_PREFIX,
+  SESSION_COOKIE,
+  SILENT_LOGIN_ATTEMPTED_COOKIE,
+  SILENT_LOGIN_SKIP_PARAM,
+} from "../constants.js";
 import { isMockAuthEnabled } from "../mock.js";
 import { loginUrl } from "../client/url.js";
 import { deleteCookie, setCookie } from "../sealed-cookie.js";
@@ -41,10 +47,12 @@ export interface AuthProxyOptions {
   publicPaths?: string[];
   /** 로그인으로 보내는 대신 401 JSON 을 돌려줄 경로. 기본 `/api/*`. */
   apiPaths?: string[];
+  /** 세션이 없을 때 OP 세션이 있는지 화면 없이 한 번 확인할 공개 경로 (예: 로그인 버튼이 있는 첫 화면) */
+  silentLoginPaths?: string[];
 }
 
 export function createAuthProxy(options: AuthProxyOptions = {}) {
-  const { publicPaths = [], apiPaths = DEFAULT_API_PATHS } = options;
+  const { publicPaths = [], apiPaths = DEFAULT_API_PATHS, silentLoginPaths = [] } = options;
 
   return async function proxy(request: NextRequest): Promise<NextResponse> {
     const { pathname } = request.nextUrl;
@@ -78,7 +86,12 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
     if (shouldDeleteCookie) request.cookies.delete(SESSION_COOKIE);
 
     let response: NextResponse;
-    if (isSessionUsable || matchesPath(pathname, publicPaths)) {
+    if (!isSessionUsable && matchesPath(pathname, silentLoginPaths) && canTrySilentLogin(request)) {
+      const silentLoginUrl = new URL(loginUrl(pathname + request.nextUrl.search), request.nextUrl.origin);
+      silentLoginUrl.searchParams.set("prompt", "none");
+      response = NextResponse.redirect(silentLoginUrl);
+      setCookie(response, SILENT_LOGIN_ATTEMPTED_COOKIE, "1");
+    } else if (isSessionUsable || matchesPath(pathname, publicPaths)) {
       response = NextResponse.next({ request: { headers: request.headers } });
     } else if (matchesPath(pathname, apiPaths)) {
       // API 는 리다이렉트를 따라가 봐야 HTML 을 받을 뿐이라 401 을 준다.
@@ -92,6 +105,30 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
     if (shouldDeleteCookie) deleteCookie(response, SESSION_COOKIE);
     return response;
   };
+}
+
+/**
+ * 다른 앱에서 로그인해 OP 세션이 있으면 공개 첫 화면에서도 화면 없이 로그인되도록, 브라우저마다 한 번 prompt=none 으로 확인한다.
+ * 사용자가 화면을 직접 연 요청에서만 시도한다.
+ * - Sec-Fetch-Mode/Dest: 화면을 여는 요청이다 (https://www.w3.org/TR/fetch-metadata/). 헤더가 없는 오래된 브라우저는 시도하지 않는다.
+ * - Sec-Purpose, Purpose, X-Moz: 프리페치·프리렌더는 사용자가 아직 들어오지 않았다.
+ * - isbot: 브라우저와 같은 헤더를 보내는 크롤러(Googlebot 렌더러 등)와 링크 미리보기 봇을 뺀다.
+ * - 리다이렉트 체인 안에서는 Sec-Fetch-* 가 처음 값 그대로라 OP 를 다녀온 요청을 헤더로 가를 수 없다.
+ *   반복은 시도 표시 쿠키로 막고, 쿠키를 저장하지 못하는 브라우저는 콜백이 붙이는 표시로 막는다.
+ */
+function canTrySilentLogin(request: NextRequest): boolean {
+  const { headers } = request;
+  return (
+    request.method === "GET" &&
+    headers.get("sec-fetch-mode") === "navigate" &&
+    headers.get("sec-fetch-dest") === "document" &&
+    !headers.has("sec-purpose") &&
+    !headers.has("purpose") &&
+    !headers.has("x-moz") &&
+    !isbot(headers.get("user-agent")) &&
+    !request.cookies.has(SILENT_LOGIN_ATTEMPTED_COOKIE) &&
+    !request.nextUrl.searchParams.has(SILENT_LOGIN_SKIP_PARAM)
+  );
 }
 
 /** lemon-cli 처럼 쿠키 없이 Bearer 로 오는 요청. 검증은 라우트의 verifyBearerToken() 이 한다. */

@@ -41,6 +41,7 @@
     "react": ">=19.0.0"
   },
   "dependencies": {
+    "isbot": "^5.2.2",
     "jose": "^6.2.2",
     "openid-client": "^6.8.8"
   },

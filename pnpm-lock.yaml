@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      isbot:
+        specifier: ^5.2.2
+        version: 5.2.2
       jose:
         specifier: ^6.2.2
         version: 6.2.2
@@ -754,6 +757,10 @@ packages:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
+
+  isbot@5.2.2:
+    resolution: {integrity: sha512-iQcBXcd+Rv/pkubRyGh2utW2j1oPG5hZY6TUhVPpqK4G+o3IbxpJNx04hgksjc/N7GK5pEorUxDeg31cFgEk/w==}
+    engines: {node: '>=18'}
 
   jose@6.2.13:
     resolution: {integrity: sha512-7TIg10ZE1x82YediN+lcrPNvGMKge9yFHQD+Qho/b8y2adfugU3AsvvHfxV0fzyFllT6l9xCjf4RWY9g/Z9PJQ==}
@@ -1652,6 +1659,8 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  isbot@5.2.2: {}
 
   jose@6.2.13: {}
 

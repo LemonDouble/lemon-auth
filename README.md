@@ -73,12 +73,20 @@ export const config = {
 |------|--------|------|
 | `publicPaths` | `[]` | 로그인 없이 열어 둘 경로. `*`로 끝나면 prefix 매칭 |
 | `apiPaths` | `["/api/*"]` | 세션이 없으면 로그인으로 보내는 대신 `401 { "code": "UNAUTHORIZED" }`를 돌려줄 경로 |
+| `silentLoginPaths` | `[]` | 세션이 없을 때 auth 서버 세션이 있는지 화면 없이 확인할 공개 경로 (예: 로그인 버튼이 있는 첫 화면). [조용한 로그인](#조용한-로그인) 참고 |
 
 - `/auth/*`, PWA와 정적 파일, `Authorization: Bearer` 요청은 그대로 통과합니다.
 - access token 만료 60초 전부터 refresh로 갱신하고, 갱신한 세션을 이번 요청의 페이지에도 넘깁니다.
 - auth 서버가 갱신을 거절하면 세션을 지웁니다. auth 서버에 닿지 못하면 세션을 두고 만료 전까지 그대로 씁니다.
 - 세션이 없으면 보호한 화면은 `/auth/login?next=<지금 주소>`로 보내고, `apiPaths`는 401로 응답합니다. GET이 아닌 요청(서버 액션)은 페이지 쪽 확인에 맡깁니다.
 - proxy는 경로만 나눕니다. 권한 판단은 반드시 각 페이지, Route Handler, 서버 액션에서 아래 서버 함수로 합니다. 레이아웃은 소프트 내비게이션에서 다시 렌더되지 않으므로 페이지에서 확인합니다.
+
+### 조용한 로그인
+
+앱마다 세션이 따로라서, 다른 앱에서 로그인했어도 이 앱의 공개 첫 화면에는 로그인 버튼이 보입니다. `silentLoginPaths`에 넣은 경로는 세션이 없으면 브라우저마다 한 번 `prompt=none`으로 auth 서버를 다녀옵니다 ([OIDC Core §3.1.2.1](https://openid.net/specs/openid-connect-core-1_0.html#AuthRequest)). auth 서버 세션이 있으면 화면 없이 로그인되고, 없으면 `login_required`를 받아 그 화면으로 돌아옵니다.
+
+- 사용자가 화면을 직접 연 요청에서만 시도합니다: `GET`, `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document` ([Fetch Metadata](https://www.w3.org/TR/fetch-metadata/)). 헤더를 보내지 않는 오래된 브라우저, iframe, 프리페치·프리렌더(`Sec-Purpose`), 봇([isbot](https://github.com/omrilotan/isbot), 브라우저와 같은 헤더를 보내는 크롤러 포함)은 시도하지 않고 화면을 그대로 보여 줍니다.
+- 시도하면 `__Host-lemon_auth_silent`(브라우저를 닫으면 사라짐)를 남겨 다시 시도하지 않습니다. 쿠키를 저장하지 못하는 브라우저는 콜백이 `/?lemon_auth_silent=skip`으로 보내 반복을 끊습니다. 리다이렉트 체인 안에서는 `Sec-Fetch-*`가 처음 값 그대로라 헤더로는 반복을 막을 수 없습니다.
 
 ## Server — `@lemondouble/lemon-auth/server`
 

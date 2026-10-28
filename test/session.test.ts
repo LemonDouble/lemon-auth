@@ -41,6 +41,7 @@ describe("세션 쿠키", () => {
       codeVerifier: "v",
       redirectUri: "https://app.lemondouble.com/auth/callback",
       next: "/",
+      silent: false,
     });
     expect(await unsealSession(transaction)).toBeNull();
   });

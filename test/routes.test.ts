@@ -1,6 +1,6 @@
 import { decodeJwt, decodeProtectedHeader } from "jose";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { LOGIN_TRANSACTION_COOKIE, SESSION_COOKIE } from "../src/constants.js";
+import { LOGIN_TRANSACTION_COOKIE, SESSION_COOKIE, SILENT_LOGIN_SKIP_PARAM } from "../src/constants.js";
 import { GET, POST } from "../src/routes/index.js";
 import { sealSession, unsealSession } from "../src/session.js";
 import { CLIENT_ID, ISSUER, createFakeOp, type FakeOp } from "./fake-op.js";
@@ -134,6 +134,53 @@ describe("/auth/callback", () => {
       appRequest(callbackUrl.pathname + callbackUrl.search, { cookies: { [LOGIN_TRANSACTION_COOKIE]: transactionCookie } })
     );
     expect(setCookieOf(response, SESSION_COOKIE)).toBeUndefined();
+  });
+});
+
+describe("조용한 로그인 (prompt=none)", () => {
+  async function startSilentLogin(next: string) {
+    const response = await GET(appRequest(`/auth/login?next=${encodeURIComponent(next)}&prompt=none`));
+    return { authorizationUrl: locationOf(response), transactionCookie: setCookieOf(response, LOGIN_TRANSACTION_COOKIE)!.value };
+  }
+
+  it("authorize 에 prompt=none 을 보낸다. 일반 로그인에는 붙이지 않는다", async () => {
+    const { authorizationUrl } = await startSilentLogin("/");
+    expect(authorizationUrl.searchParams.get("prompt")).toBe("none");
+    const normal = await startLogin("/");
+    expect(normal.authorizationUrl.searchParams.has("prompt")).toBe(false);
+  });
+
+  it("OP 세션이 있으면 화면 없이 로그인해 시작한 화면으로 돌아간다", async () => {
+    const { authorizationUrl, transactionCookie } = await startSilentLogin("/?ref=mail");
+    const callbackUrl = await fake.op!.approve(authorizationUrl, USER);
+    const response = await GET(
+      appRequest(callbackUrl.pathname + callbackUrl.search, { cookies: { [LOGIN_TRANSACTION_COOKIE]: transactionCookie } })
+    );
+    expect(locationOf(response).href).toBe(`${APP_ORIGIN}/?ref=mail`);
+    expect(setCookieOf(response, SESSION_COOKIE)?.value).toBeTruthy();
+  });
+
+  it.each(["login_required", "interaction_required", "consent_required", "server_error"])(
+    "%s 로 끝나면 세션 없이 시작한 공개 화면으로 돌아간다",
+    async (error) => {
+      const { authorizationUrl, transactionCookie } = await startSilentLogin("/about");
+      const state = authorizationUrl.searchParams.get("state")!;
+      const response = await GET(
+        appRequest(`/auth/callback?error=${error}&state=${state}&iss=${ISSUER}`, {
+          cookies: { [LOGIN_TRANSACTION_COOKIE]: transactionCookie },
+        })
+      );
+      expect(locationOf(response).href).toBe(`${APP_ORIGIN}/about`);
+      expect(setCookieOf(response, SESSION_COOKIE)).toBeUndefined();
+      expect(setCookieOf(response, LOGIN_TRANSACTION_COOKIE)?.attributes).toContain("Max-Age=0");
+    }
+  );
+
+  it("로그인 진행 쿠키를 저장하지 못한 브라우저는 다시 시도하지 않도록 표시를 붙여 첫 화면으로 보낸다", async () => {
+    const { authorizationUrl } = await startSilentLogin("/");
+    const state = authorizationUrl.searchParams.get("state")!;
+    const response = await GET(appRequest(`/auth/callback?error=login_required&state=${state}&iss=${ISSUER}`));
+    expect(locationOf(response).href).toBe(`${APP_ORIGIN}/?${SILENT_LOGIN_SKIP_PARAM}=skip`);
   });
 });
 

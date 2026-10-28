@@ -8,6 +8,7 @@ import {
   PROFILE_RETURN_PATH,
   SCOPE,
   SESSION_COOKIE,
+  SILENT_LOGIN_SKIP_PARAM,
 } from "../constants.js";
 import { errorCode, warnAuth } from "../log.js";
 import { isMockAuthEnabled } from "../mock.js";
@@ -57,6 +58,7 @@ async function startLogin(request: NextRequest): Promise<Response> {
   const next = safeNextPath(request.nextUrl.searchParams.get("next"), origin);
   if (isMockAuthEnabled()) return redirectTo(request, next);
 
+  const silent = request.nextUrl.searchParams.get("prompt") === "none";
   const configuration = await getOidcConfiguration();
   const proxyUrl = redirectProxyUrl();
   const isPreview = proxyUrl !== null && proxyUrl.origin !== origin;
@@ -66,6 +68,7 @@ async function startLogin(request: NextRequest): Promise<Response> {
     codeVerifier: client.randomPKCECodeVerifier(),
     redirectUri: isPreview ? proxyUrl.href : origin + CALLBACK_PATH,
     next,
+    silent,
   };
   const authorizationUrl = client.buildAuthorizationUrl(configuration, {
     redirect_uri: transaction.redirectUri,
@@ -74,6 +77,7 @@ async function startLogin(request: NextRequest): Promise<Response> {
     nonce: transaction.nonce,
     code_challenge: await client.calculatePKCECodeChallenge(transaction.codeVerifier),
     code_challenge_method: "S256",
+    ...(silent && { prompt: "none" }),
   });
 
   const response = NextResponse.redirect(authorizationUrl);
@@ -96,19 +100,28 @@ async function handleCallback(request: NextRequest): Promise<Response> {
   return response;
 }
 
-/** 실패하면 오류 종류와 관계없이 로그인 전 상태로 앱 첫 화면을 보여 준다. 사용자가 볼 오류 화면은 OP 가 이미 보여 주었다. */
+/**
+ * 실패하면 오류 종류와 관계없이 로그인 전 상태로 앱 첫 화면을 보여 준다. 사용자가 볼 오류 화면은 OP 가 이미 보여 주었다.
+ * 조용한 로그인은 OP 세션이 없으면 login_required 등으로 끝나는 것이 정상이라, 남기지 않고 시작한 공개 화면으로 돌려보낸다
+ * (https://openid.net/specs/openid-connect-core-1_0.html#AuthError).
+ */
 async function completeLogin(request: NextRequest, transaction: LoginTransaction | null): Promise<NextResponse> {
   const parameters = request.nextUrl.searchParams;
+  if (!transaction && parameters.has("error")) {
+    // 로그인 진행 쿠키를 저장하지 못한 브라우저다. 조용한 로그인이었다면 다시 시도하지 않게 표시를 붙인다.
+    return redirectTo(request, `/?${SILENT_LOGIN_SKIP_PARAM}=skip`);
+  }
   if (!transaction || parameters.get("state") !== transaction.state) {
     warnAuth("callback without matching login transaction");
     return redirectTo(request, "/");
   }
+  const failureDestination = transaction.silent ? transaction.next : "/";
   const authorizationError = parameters.get("error");
   if (authorizationError) {
-    if (authorizationError !== "access_denied") {
+    if (authorizationError !== "access_denied" && !transaction.silent) {
       warnAuth("authorization error", { error: authorizationError });
     }
-    return redirectTo(request, "/");
+    return redirectTo(request, failureDestination);
   }
 
   // code 교환에 보내는 redirect_uri 는 이 URL 에서 query 를 뗀 값이라, authorize 에 보낸 주소로 만든다.
@@ -127,7 +140,7 @@ async function completeLogin(request: NextRequest, transaction: LoginTransaction
     return response;
   } catch (error) {
     warnAuth("authorization code exchange failed", { code: errorCode(error) });
-    return redirectTo(request, "/");
+    return redirectTo(request, failureDestination);
   }
 }
 

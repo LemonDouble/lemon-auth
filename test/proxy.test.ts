@@ -1,6 +1,11 @@
 import { decodeJwt } from "jose";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { LOGIN_TRANSACTION_COOKIE, SESSION_COOKIE } from "../src/constants.js";
+import {
+  LOGIN_TRANSACTION_COOKIE,
+  SESSION_COOKIE,
+  SILENT_LOGIN_ATTEMPTED_COOKIE,
+  SILENT_LOGIN_SKIP_PARAM,
+} from "../src/constants.js";
 import { createAuthProxy } from "../src/proxy/index.js";
 import { GET } from "../src/routes/index.js";
 import { sealSession, unsealSession, type StoredSession } from "../src/session.js";
@@ -118,5 +123,56 @@ describe("세션이 있을 때", () => {
     const afterExpiry = await requestWith("/dashboard", expired);
     expect(locationOf(afterExpiry).pathname).toBe("/auth/login");
     expect(setCookieOf(afterExpiry, SESSION_COOKIE)).toBeUndefined();
+  });
+});
+
+describe("조용한 로그인 (silentLoginPaths)", () => {
+  const silentProxy = createAuthProxy({ publicPaths: ["/", "/s/*"], silentLoginPaths: ["/"] });
+  const CHROME = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+  const GOOGLEBOT =
+    "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.7390.122 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+  const NAVIGATION = { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document", "sec-fetch-site": "none", "user-agent": CHROME };
+
+  function visit(path: string, headers: Record<string, string>, cookies: Record<string, string> = {}, method = "GET") {
+    return silentProxy(appRequest(path, { headers, cookies, method }));
+  }
+
+  it("브라우저가 화면을 열면 한 번 prompt=none 으로 확인하고, 브라우저를 닫을 때까지 남는 시도 표시를 둔다", async () => {
+    const response = await visit("/?ref=mail", NAVIGATION);
+    const location = locationOf(response);
+    expect(location.pathname).toBe("/auth/login");
+    expect(location.searchParams.get("next")).toBe("/?ref=mail");
+    expect(location.searchParams.get("prompt")).toBe("none");
+    const attempted = setCookieOf(response, SILENT_LOGIN_ATTEMPTED_COOKIE);
+    expect(attempted?.attributes).not.toMatch(/Max-Age|Expires/i);
+    expect(attempted?.attributes).toContain("Secure");
+  });
+
+  it.each([
+    ["이미 시도했다", NAVIGATION, { [SILENT_LOGIN_ATTEMPTED_COOKIE]: "1" }, "/"],
+    ["쿠키를 저장하지 못해 콜백이 표시를 붙였다", NAVIGATION, {}, `/?${SILENT_LOGIN_SKIP_PARAM}=skip`],
+    ["Sec-Fetch 헤더가 없다 (오래된 브라우저, 단순 HTTP 클라이언트)", { "user-agent": CHROME }, {}, "/"],
+    ["화면이 아닌 요청이다", { ...NAVIGATION, "sec-fetch-mode": "cors", "sec-fetch-dest": "empty" }, {}, "/"],
+    ["다른 페이지의 iframe 안에서 연 화면이다", { ...NAVIGATION, "sec-fetch-dest": "iframe" }, {}, "/"],
+    ["프리렌더다", { ...NAVIGATION, "sec-purpose": "prefetch;prerender" }, {}, "/"],
+    ["Firefox 프리페치다", { ...NAVIGATION, "x-moz": "prefetch" }, {}, "/"],
+    ["브라우저와 같은 헤더를 보내는 크롤러다", { ...NAVIGATION, "user-agent": GOOGLEBOT }, {}, "/"],
+    ["링크 미리보기 봇이다", { ...NAVIGATION, "user-agent": "facebookexternalhit/1.1; kakaotalk-scrap/1.0; +https://devtalk.kakao.com/t/scrap/33984" }, {}, "/"],
+    ["silentLoginPaths 가 아닌 공개 경로다", NAVIGATION, {}, "/s/abc"],
+  ])("%s → 시도하지 않고 화면을 그대로 보여 준다", async (_, headers, cookies, path) => {
+    const response = await visit(path, headers, cookies);
+    expect(response.headers.get("location")).toBeNull();
+    expect(setCookieOf(response, SILENT_LOGIN_ATTEMPTED_COOKIE)).toBeUndefined();
+  });
+
+  it("GET 이 아닌 요청(서버 액션)에서는 시도하지 않는다", async () => {
+    const response = await visit("/", NAVIGATION, {}, "POST");
+    expect(response.headers.get("location")).toBeNull();
+  });
+
+  it("세션이 있으면 시도하지 않는다", async () => {
+    const session = await sessionExpiringIn(600);
+    const response = await visit("/", NAVIGATION, { [SESSION_COOKIE]: await sealSession(session) });
+    expect(response.headers.get("location")).toBeNull();
   });
 });

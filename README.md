@@ -112,7 +112,8 @@ interface LemonUser {
 }
 
 interface BearerToken {
-  sub: string;
+  kind: "user" | "service"; // service: 사용자 없이 프로그램이 자기 이름으로 받은 토큰
+  sub: string; // user 면 사용자, service 면 clientId 와 같음
   clientId: string; // 토큰을 받은 프로그램 (예: lemon-cli)
   scope: string[];
   groups: string[];
@@ -122,6 +123,33 @@ interface BearerToken {
 
 - 사용자 정보는 세션의 ID Token에서 읽습니다. 프로필은 갱신 때 받는 새 ID Token으로 바뀝니다 (`/auth/profile-return`을 거치면 바로).
 - Bearer 토큰에는 프로필이 없습니다. 다른 프로그램이 앱 API를 부르려면, auth 서버에서 그 프로그램 client의 추가 대상(`client_audience`)에 이 앱을 넣어야 합니다.
+
+### 다른 프로그램의 호출 받기
+
+- 다른 프로그램이 이 앱의 API를 부르려면, auth 서버 관리자 콘솔에서 그 프로그램의 "호출할 서비스"(`client_audience`)에 이 앱을 넣습니다. 그래야 토큰의 `aud`에 이 앱이 들어갑니다.
+- 호출하는 쪽은 두 가지입니다.
+  - `kind: "user"`: 사용자가 로그인해 받은 토큰입니다. lemon-cli, 백엔드가 있는 모바일 앱의 서버 등이 사용자 대신 부릅니다. 승인이 필요한 앱이면, 이 앱에 승인된 사용자의 토큰에만 `aud`가 들어갑니다.
+  - `kind: "service"`: 사용자 없이 프로그램이 자기 이름으로 받은 토큰입니다(client_credentials, [RFC 6749 §4.4](https://www.rfc-editor.org/rfc/rfc6749#section-4.4)). 배치 작업이나 다른 서버가 씁니다. 사용자가 없으므로, 어떤 프로그램(`clientId`)이 무엇을 할 수 있는지와 그 프로그램이 만든 데이터의 주인은 앱이 정합니다.
+
+```bash
+# service 토큰 받기 (auth 서버에서 "서버 간 통신" 유형으로 만든 client)
+curl -u "$CLIENT_ID:$CLIENT_SECRET" -d grant_type=client_credentials https://auth.lemondouble.com/oauth/token
+```
+
+```ts
+import { verifyBearerToken } from "@lemondouble/lemon-auth/server";
+
+const ALLOWED_SERVICES = [process.env.BACKUP_CLIENT_ID];
+
+export async function POST(request: Request) {
+  const token = await verifyBearerToken(request);
+  if (!token) return Response.json({ error: "unauthorized" }, { status: 401 });
+  if (token.kind === "service" && !ALLOWED_SERVICES.includes(token.clientId)) {
+    return Response.json({ error: "forbidden" }, { status: 403 });
+  }
+  // ...
+}
+```
 
 ```tsx
 import { requireSession } from "@lemondouble/lemon-auth/server";

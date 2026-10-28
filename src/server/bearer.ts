@@ -47,6 +47,8 @@ export async function verifyBearerToken(request: Request): Promise<BearerToken |
     }
     const groups = isStringArray(payload.groups) ? payload.groups : [];
     return {
+      // 사용자가 없는 토큰은 sub 가 client_id 다 (RFC 9068 §2.2). auth 서버가 client_id 를 정하므로 사용자 sub 와 겹치지 않는다.
+      kind: payload.sub === payload.client_id ? "service" : "user",
       sub: payload.sub,
       clientId: payload.client_id,
       scope: typeof payload.scope === "string" ? payload.scope.split(" ").filter(Boolean) : [],

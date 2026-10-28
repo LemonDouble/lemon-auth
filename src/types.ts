@@ -16,6 +16,8 @@ export type LemonSession =
 
 /** 다른 프로그램(lemon-cli 등)이 `Authorization: Bearer` 로 보낸 access token. 프로필은 없다. */
 export interface BearerToken {
+  /** user: 사용자가 로그인해 받은 토큰. service: 사용자 없이 프로그램이 자기 이름으로 받은 토큰 (client_credentials) */
+  kind: "user" | "service";
   sub: string;
   clientId: string;
   scope: string[];

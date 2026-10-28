@@ -78,6 +78,16 @@ describe("/auth/callback", () => {
     expect(session?.accessToken).toBeUndefined();
   });
 
+  it("로그인을 마친 뒤에도 next 로 앱 밖에 보내지 않는다", async () => {
+    const { authorizationUrl, transactionCookie } = await startLogin("/%2e%2e//evil.example/");
+    const callbackUrl = await fake.op!.approve(authorizationUrl, USER);
+    const response = await GET(
+      appRequest(callbackUrl.pathname + callbackUrl.search, { cookies: { [LOGIN_TRANSACTION_COOKIE]: transactionCookie } })
+    );
+    expect(locationOf(response).href).toBe(`${APP_ORIGIN}/`);
+    expect(setCookieOf(response, SESSION_COOKIE)).toBeDefined();
+  });
+
   it("LEMON_AUTH_KEEP_ACCESS_TOKEN 을 켠 앱은 access token 도 담는다", async () => {
     process.env.LEMON_AUTH_KEEP_ACCESS_TOKEN = "true";
     try {
@@ -216,6 +226,11 @@ describe("프로필", () => {
     } finally {
       fake.op!.state.profileName = undefined;
     }
+  });
+
+  it("세션 없이 직접 들어와도 next 로 앱 밖에 보내지 않는다", async () => {
+    const response = await GET(appRequest(`/auth/profile-return?next=${encodeURIComponent("/..//evil.example/")}`));
+    expect(locationOf(response).href).toBe(`${APP_ORIGIN}/`);
   });
 
   it("OP 가 끝낸 세션이면 쿠키를 지운다", async () => {

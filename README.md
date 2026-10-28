@@ -97,6 +97,7 @@ export const config = {
 | `requireSession(next = "/")` | 세션이 없으면 `/auth/login?next=`로 보내고, 있으면 `LemonUser`를 돌려줍니다. |
 | `requireAdmin(next = "/")` | `requireSession()`에 더해, 관리자가 아니면 `notFound()`(404)로 응답합니다. [`forbidden()`](https://nextjs.org/docs/app/api-reference/functions/forbidden)은 아직 실험 기능이라 쓰지 않습니다. |
 | `verifyBearerToken(request)` | `Authorization: Bearer` access token을 [RFC 9068](https://www.rfc-editor.org/rfc/rfc9068) 규칙(`typ: at+jwt`, `iss`, `aud`에 이 앱의 client ID, `exp`, RS256 서명)으로 검증합니다. 실패하면 `null`입니다. |
+| `lookupClient(clientId)` | auth 서버에 등록된 서비스의 이름과 아이콘(`ClientInfo`)을 조회합니다. 이 앱의 client ID와 secret으로 인증하고, 결과를 10분 동안 기억합니다. 없는 client이거나 auth 서버에 닿지 못하면 `null`입니다. |
 | `getAccessToken()` | `{ value, expiresAt }` 또는 `null`. `LEMON_AUTH_KEEP_ACCESS_TOKEN=true`인 앱만 쓸 수 있습니다. |
 | `loginUrl()`, `logoutUrl()`, `profileUrl()` | Client와 같습니다. |
 
@@ -119,6 +120,12 @@ interface BearerToken {
   groups: string[];
   isAdmin: boolean;
 }
+
+interface ClientInfo {
+  clientId: string;
+  name: string; // 관리자 콘솔에 등록한 서비스 이름
+  iconUrl: string;
+}
 ```
 
 - 사용자 정보는 세션의 ID Token에서 읽습니다. 프로필은 갱신 때 받는 새 ID Token으로 바뀝니다 (`/auth/profile-return`을 거치면 바로).
@@ -126,10 +133,10 @@ interface BearerToken {
 
 ### 다른 프로그램의 호출 받기
 
-- 다른 프로그램이 이 앱의 API를 부르려면, auth 서버 관리자 콘솔에서 그 프로그램의 "호출할 서비스"(`client_audience`)에 이 앱을 넣습니다. 그래야 토큰의 `aud`에 이 앱이 들어갑니다.
+- 다른 프로그램이 이 앱의 API를 부르려면, auth 서버 관리자 콘솔에서 그 프로그램의 "호출할 서비스"(`client_audience`)에 이 앱을 넣습니다. 그래야 토큰의 `aud`에 이 앱이 들어가고, `verifyBearerToken()`이 받아 줍니다. 이 설정이 허용 목록이므로 앱에 따로 둘 필요는 없습니다.
 - 호출하는 쪽은 두 가지입니다.
   - `kind: "user"`: 사용자가 로그인해 받은 토큰입니다. lemon-cli, 백엔드가 있는 모바일 앱의 서버 등이 사용자 대신 부릅니다. 승인이 필요한 앱이면, 이 앱에 승인된 사용자의 토큰에만 `aud`가 들어갑니다.
-  - `kind: "service"`: 사용자 없이 프로그램이 자기 이름으로 받은 토큰입니다(client_credentials, [RFC 6749 §4.4](https://www.rfc-editor.org/rfc/rfc6749#section-4.4)). 배치 작업이나 다른 서버가 씁니다. 사용자가 없으므로, 어떤 프로그램(`clientId`)이 무엇을 할 수 있는지와 그 프로그램이 만든 데이터의 주인은 앱이 정합니다.
+  - `kind: "service"`: 사용자 없이 프로그램이 자기 이름으로 받은 토큰입니다(client_credentials, [RFC 6749 §4.4](https://www.rfc-editor.org/rfc/rfc6749#section-4.4)). 배치 작업이나 다른 서버가 씁니다. 누가 불렀는지는 `lookupClient(token.clientId)`로 서비스 이름을 확인합니다. 사용자가 없으므로, 그 프로그램이 만든 데이터의 주인은 앱이 정합니다.
 
 ```bash
 # service 토큰 받기 (auth 서버에서 "서버 간 통신" 유형으로 만든 client)
@@ -137,17 +144,15 @@ curl -u "$CLIENT_ID:$CLIENT_SECRET" -d grant_type=client_credentials https://aut
 ```
 
 ```ts
-import { verifyBearerToken } from "@lemondouble/lemon-auth/server";
-
-const ALLOWED_SERVICES = [process.env.BACKUP_CLIENT_ID];
+import { lookupClient, verifyBearerToken } from "@lemondouble/lemon-auth/server";
 
 export async function POST(request: Request) {
   const token = await verifyBearerToken(request);
-  if (!token) return Response.json({ error: "unauthorized" }, { status: 401 });
-  if (token.kind === "service" && !ALLOWED_SERVICES.includes(token.clientId)) {
-    return Response.json({ error: "forbidden" }, { status: 403 });
+  if (!token) return Response.json({ code: "UNAUTHORIZED" }, { status: 401 });
+  if (token.kind === "service") {
+    const caller = await lookupClient(token.clientId); // { clientId, name: "nightly-backup", iconUrl } 또는 null
+    // ...
   }
-  // ...
 }
 ```
 

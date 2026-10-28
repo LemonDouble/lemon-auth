@@ -25,6 +25,13 @@ export interface BearerToken {
   isAdmin: boolean;
 }
 
+/** auth 서버에 등록된 서비스. `lookupClient()` 가 돌려준다. */
+export interface ClientInfo {
+  clientId: string;
+  name: string;
+  iconUrl: string;
+}
+
 export interface AccessToken {
   value: string;
   /** 만료 시각 (초) */

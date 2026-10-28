@@ -5,6 +5,7 @@ import {
   CALLBACK_PATH,
   LOGGED_OUT_PATH,
   LOGIN_TRANSACTION_COOKIE,
+  PROFILE_PENDING_COOKIE,
   PROFILE_RETURN_PATH,
   SCOPE,
   SESSION_COOKIE,
@@ -144,7 +145,10 @@ async function completeLogin(request: NextRequest, transaction: LoginTransaction
   }
 }
 
-/** OP 의 프로필 화면에서 [돌아가기] 를 누르면 `/auth/profile-return` 으로 돌아온다. */
+// 프로필을 바꾸는 데 넉넉한 시간. 지나면 다음 정기 갱신(최대 30분) 때 반영된다.
+const PROFILE_PENDING_MAX_AGE_SECONDS = 10 * 60;
+
+/** OP 의 프로필 화면에서 [돌아가기] 를 누르면 `/auth/profile-return` 으로 돌아온다. 뒤로 가기로 돌아오면 proxy 가 갱신한다. */
 function openProfile(request: NextRequest): Response {
   const origin = request.nextUrl.origin;
   const next = safeNextPath(request.nextUrl.searchParams.get("next"), origin);
@@ -154,13 +158,16 @@ function openProfile(request: NextRequest): Response {
   returnUrl.searchParams.set("next", next);
   const profileUrl = new URL("/profile", issuerUrl());
   profileUrl.searchParams.set("redirect_url", returnUrl.href);
-  return NextResponse.redirect(profileUrl);
+  const response = NextResponse.redirect(profileUrl);
+  setCookie(response, PROFILE_PENDING_COOKIE, "1", PROFILE_PENDING_MAX_AGE_SECONDS);
+  return response;
 }
 
 /** 바꾼 프로필을 다음 갱신(최대 30분)까지 기다리지 않고 바로 반영한다. */
 async function returnFromProfile(request: NextRequest): Promise<Response> {
   const next = safeNextPath(request.nextUrl.searchParams.get("next"), request.nextUrl.origin);
   const response = redirectTo(request, next);
+  deleteCookie(response, PROFILE_PENDING_COOKIE);
   const session = await unsealSession(request.cookies.get(SESSION_COOKIE)?.value);
   if (!session || isMockAuthEnabled()) return response;
 

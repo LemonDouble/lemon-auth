@@ -1,6 +1,11 @@
 import { decodeJwt, decodeProtectedHeader } from "jose";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { LOGIN_TRANSACTION_COOKIE, SESSION_COOKIE, SILENT_LOGIN_SKIP_PARAM } from "../src/constants.js";
+import {
+  LOGIN_TRANSACTION_COOKIE,
+  PROFILE_PENDING_COOKIE,
+  SESSION_COOKIE,
+  SILENT_LOGIN_SKIP_PARAM,
+} from "../src/constants.js";
 import { GET, POST } from "../src/routes/index.js";
 import { sealSession, unsealSession } from "../src/session.js";
 import { CLIENT_ID, ISSUER, createFakeOp, type FakeOp } from "./fake-op.js";
@@ -259,6 +264,8 @@ describe("프로필", () => {
     const destination = locationOf(response);
     expect(destination.origin + destination.pathname).toBe(`${ISSUER}/profile`);
     expect(destination.searchParams.get("redirect_url")).toBe(`${APP_ORIGIN}/auth/profile-return?next=%2Fmy`);
+    // 뒤로 가기로 돌아와도 proxy 가 갱신하도록 10분짜리 표시를 남긴다.
+    expect(setCookieOf(response, PROFILE_PENDING_COOKIE)?.attributes).toContain("Max-Age=600");
   });
 
   it("/auth/profile-return 은 그 자리에서 갱신해 바뀐 프로필을 세션에 반영한다", async () => {
@@ -267,6 +274,7 @@ describe("프로필", () => {
     try {
       const response = await GET(appRequest("/auth/profile-return?next=%2Fmy", { cookies: { [SESSION_COOKIE]: sessionCookie } }));
       expect(locationOf(response).href).toBe(`${APP_ORIGIN}/my`);
+      expect(setCookieOf(response, PROFILE_PENDING_COOKIE)?.attributes).toContain("Max-Age=0");
       const session = await unsealSession(setCookieOf(response, SESSION_COOKIE)!.value);
       expect(decodeJwt(session!.idToken).name).toBe("바뀐 이름");
       expect(session!.refreshToken).toBe((await unsealSession(sessionCookie))!.refreshToken);

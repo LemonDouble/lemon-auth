@@ -2,6 +2,7 @@ import { decodeJwt } from "jose";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   LOGIN_TRANSACTION_COOKIE,
+  PROFILE_PENDING_COOKIE,
   SESSION_COOKIE,
   SILENT_LOGIN_ATTEMPTED_COOKIE,
   SILENT_LOGIN_SKIP_PARAM,
@@ -174,5 +175,40 @@ describe("조용한 로그인 (silentLoginPaths)", () => {
     const session = await sessionExpiringIn(600);
     const response = await visit("/", NAVIGATION, { [SESSION_COOKIE]: await sealSession(session) });
     expect(response.headers.get("location")).toBeNull();
+  });
+});
+
+describe("프로필 화면에서 뒤로 가기로 돌아왔을 때", () => {
+  async function visitWithPendingProfile(session: StoredSession) {
+    return proxy(appRequest("/my", { cookies: { [SESSION_COOKIE]: await sealSession(session), [PROFILE_PENDING_COOKIE]: "1" } }));
+  }
+
+  it("세션이 신선해도 한 번 갱신해 바뀐 프로필을 이번 요청부터 쓰고 표시를 지운다", async () => {
+    const session = await sessionExpiringIn(1200);
+    fake.op!.state.profileName = "바뀐 이름";
+    try {
+      const response = await visitWithPendingProfile(session);
+      const refreshed = await unsealSession(forwardedSessionCookie(response));
+      expect(decodeJwt(refreshed!.idToken).name).toBe("바뀐 이름");
+      expect(setCookieOf(response, SESSION_COOKIE)?.value).toBeTruthy();
+      expect(setCookieOf(response, PROFILE_PENDING_COOKIE)?.attributes).toContain("Max-Age=0");
+    } finally {
+      fake.op!.state.profileName = undefined;
+    }
+  });
+
+  it("표시가 없으면 신선한 세션은 갱신하지 않는다", async () => {
+    const session = await sessionExpiringIn(1200);
+    const response = await requestWith("/my", session);
+    expect(setCookieOf(response, SESSION_COOKIE)).toBeUndefined();
+  });
+
+  it("OP 에 닿지 못하면 세션을 그대로 쓰고 표시를 남겨 다음 요청에서 다시 시도한다", async () => {
+    const session = await sessionExpiringIn(1200);
+    fake.op!.state.unreachable = true;
+    const response = await visitWithPendingProfile(session);
+    expect(response.headers.get("location")).toBeNull();
+    expect(setCookieOf(response, SESSION_COOKIE)).toBeUndefined();
+    expect(setCookieOf(response, PROFILE_PENDING_COOKIE)).toBeUndefined();
   });
 });

@@ -51,7 +51,7 @@ export { GET, POST } from "@lemondouble/lemon-auth/routes";
 | `GET /auth/callback` | code를 교환해 세션 쿠키를 만들고 `next`로 보냅니다. 오류를 받으면 종류와 관계없이 세션 없이 `/`로 보냅니다 (오류 화면은 auth 서버가 이미 보여 줌). |
 | `POST /auth/logout` | 세션을 지우고 auth 서버 로그아웃([RP-Initiated Logout](https://openid.net/specs/openid-connect-rpinitiated-1_0.html))으로 보냅니다. 같은 브라우저의 다른 앱도 다음 갱신 때 로그아웃됩니다. 다른 사이트가 몰래 로그아웃시키지 못하게, 앱 자신의 화면에서 보낸 요청(Origin 확인)만 받습니다. |
 | `GET /auth/logged-out` | 로그아웃 후 돌아오는 곳. `/`로 보냅니다. |
-| `GET /auth/profile?next=` | auth 서버의 프로필 화면으로 보냅니다. |
+| `GET /auth/profile?next=` | auth 서버의 프로필 화면으로 보냅니다. 브라우저 뒤로 가기로 돌아와도 바뀐 프로필이 반영되도록 10분짜리 표시 쿠키(`__Host-lemon_auth_profile`)를 남깁니다. |
 | `GET /auth/profile-return?next=` | 프로필 화면에서 돌아오는 곳. 그 자리에서 갱신해 바뀐 프로필을 반영한 뒤 `next`로 보냅니다. |
 
 `next`는 앱 안의 경로(`/`로 시작)만 받고, 아니면 `/`로 바꿉니다.
@@ -77,6 +77,7 @@ export const config = {
 
 - `/auth/*`, PWA와 정적 파일, `Authorization: Bearer` 요청은 그대로 통과합니다.
 - access token 만료 60초 전부터 refresh로 갱신하고, 갱신한 세션을 이번 요청의 페이지에도 넘깁니다.
+- 프로필 화면에 다녀온 표시가 있으면 세션이 신선해도 한 번 갱신합니다 (뒤로 가기로 돌아온 경우).
 - auth 서버가 갱신을 거절하면 세션을 지웁니다. auth 서버에 닿지 못하면 세션을 두고 만료 전까지 그대로 씁니다.
 - 세션이 없으면 보호한 화면은 `/auth/login?next=<지금 주소>`로 보내고, `apiPaths`는 401로 응답합니다. GET이 아닌 요청(서버 액션)은 페이지 쪽 확인에 맡깁니다.
 - proxy는 경로만 나눕니다. 권한 판단은 반드시 각 페이지, Route Handler, 서버 액션에서 아래 서버 함수로 합니다. 레이아웃은 소프트 내비게이션에서 다시 렌더되지 않으므로 페이지에서 확인합니다.

@@ -2,6 +2,7 @@ import { isbot } from "isbot";
 import { NextResponse, type NextRequest } from "next/server";
 import {
   AUTH_ROUTE_PREFIX,
+  PROFILE_PENDING_COOKIE,
   SESSION_COOKIE,
   SILENT_LOGIN_ATTEMPTED_COOKIE,
   SILENT_LOGIN_SKIP_PARAM,
@@ -67,7 +68,9 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
 
     const sessionCookie = request.cookies.get(SESSION_COOKIE)?.value;
     const session = await unsealSession(sessionCookie);
-    if (session && !needsRefresh(session)) return NextResponse.next();
+    // 프로필 화면에서 [돌아가기] 대신 브라우저 뒤로 가기로 돌아와도 바뀐 프로필을 받도록, 세션이 신선해도 한 번 갱신한다.
+    const isProfilePending = request.cookies.has(PROFILE_PENDING_COOKIE);
+    if (session && !needsRefresh(session) && !isProfilePending) return NextResponse.next();
 
     const refresh = session ? await refreshSession(session) : null;
     if (refresh?.type === "refreshed") {
@@ -76,6 +79,7 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
       request.cookies.set(SESSION_COOKIE, sealed);
       const response = NextResponse.next({ request: { headers: request.headers } });
       setCookie(response, SESSION_COOKIE, sealed, SESSION_MAX_AGE_SECONDS);
+      if (isProfilePending) deleteCookie(response, PROFILE_PENDING_COOKIE);
       return response;
     }
     // auth 서버에 닿지 못했으면 세션을 두고, 만료 전이면 그대로 쓴다. 다음 요청에서 다시 갱신한다.
@@ -103,6 +107,8 @@ export function createAuthProxy(options: AuthProxyOptions = {}) {
       response = NextResponse.redirect(new URL(loginUrl(pathname + request.nextUrl.search), request.nextUrl.origin));
     }
     if (shouldDeleteCookie) deleteCookie(response, SESSION_COOKIE);
+    // 갱신하지 못했으면(OP 에 닿지 못함) 표시를 남겨 다음 요청에서 다시 시도한다.
+    if (isProfilePending && !isRefreshUnavailable) deleteCookie(response, PROFILE_PENDING_COOKIE);
     return response;
   };
 }

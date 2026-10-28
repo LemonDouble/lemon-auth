@@ -1,7 +1,8 @@
 import { SignJWT, UnsecuredJWT } from "jose";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { SESSION_COOKIE } from "../src/constants.js";
-import { getAccessToken, getSession, requireAdmin, requireSession, verifyBearerToken } from "../src/server/index.js";
+import { getAccessToken, getSession, lookupClient, requireAdmin, requireSession, verifyBearerToken } from "../src/server/index.js";
+import { clearClientLookupCache } from "../src/server/client-lookup.js";
 import { sealSession, type StoredSession } from "../src/session.js";
 import { CLIENT_ID, ISSUER, OTHER_CLIENT_ID, createFakeOp, type FakeOp } from "./fake-op.js";
 
@@ -139,5 +140,31 @@ describe("verifyBearerToken", () => {
       .sign(new Uint8Array(32));
     expect(await verifyBearerToken(bearer(forged))).toBeNull();
     expect(await verifyBearerToken(new Request("https://app.test/api/files"))).toBeNull();
+  });
+});
+
+describe("lookupClient", () => {
+  afterEach(() => {
+    clearClientLookupCache();
+    fake.op!.state.unreachable = false;
+    fake.op!.state.clientLookups = 0;
+  });
+
+  it("client_id 로 서비스 이름과 아이콘을 조회하고 잠시 기억한다", async () => {
+    const expected = { clientId: OTHER_CLIENT_ID, name: "nightly-backup", iconUrl: `${ISSUER}/public/lemon-logo.webp` };
+    expect(await lookupClient(OTHER_CLIENT_ID)).toEqual(expected);
+    expect(await lookupClient(OTHER_CLIENT_ID)).toEqual(expected);
+    expect(fake.op!.state.clientLookups).toBe(1);
+  });
+
+  it("없는 client 는 null 이다", async () => {
+    expect(await lookupClient("33333333-3333-4333-8333-333333333333")).toBeNull();
+  });
+
+  it("auth 서버에 닿지 못하면 null 이고, 기억하지 않아 다음에 다시 묻는다", async () => {
+    fake.op!.state.unreachable = true;
+    expect(await lookupClient(OTHER_CLIENT_ID)).toBeNull();
+    fake.op!.state.unreachable = false;
+    expect(await lookupClient(OTHER_CLIENT_ID)).toMatchObject({ name: "nightly-backup" });
   });
 });

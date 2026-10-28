@@ -26,7 +26,7 @@ export async function createFakeOp() {
   const kid = await calculateJwkThumbprint(publicJwk);
   const codes = new Map<string, PendingCode>();
   const refreshTokens = new Map<string, FakeUser>();
-  const state = { unreachable: false, profileName: undefined as string | undefined };
+  const state = { unreachable: false, profileName: undefined as string | undefined, clientLookups: 0 };
 
   const metadata: client.ServerMetadata = {
     issuer: ISSUER,
@@ -99,6 +99,16 @@ export async function createFakeOp() {
     return Response.json({ error: "unsupported_grant_type" }, { status: 400 });
   }
 
+  // auth 서버의 client 조회 API. 등록된 client 의 Basic 인증이 있어야 한다.
+  function handleClientLookup(request: Request, url: URL): Response {
+    state.clientLookups += 1;
+    if (request.headers.get("authorization") !== "Basic " + btoa(`${CLIENT_ID}:${CLIENT_SECRET}`)) {
+      return Response.json({ error: "invalid_client" }, { status: 401 });
+    }
+    if (url.pathname !== `/api/clients/${OTHER_CLIENT_ID}`) return Response.json({ error: "not_found" }, { status: 404 });
+    return Response.json({ client_id: OTHER_CLIENT_ID, name: "nightly-backup", icon_url: `${ISSUER}/public/lemon-logo.webp` });
+  }
+
   const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     if (state.unreachable) throw new TypeError("fetch failed");
     const request = new Request(input, init);
@@ -107,6 +117,7 @@ export async function createFakeOp() {
       return Response.json({ keys: [{ ...publicJwk, kid, alg: "RS256", use: "sig" }] });
     }
     if (url.href === metadata.token_endpoint) return handleToken(request);
+    if (url.pathname.startsWith("/api/clients/")) return handleClientLookup(request, url);
     return new Response("not found", { status: 404 });
   };
 

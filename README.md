@@ -29,7 +29,7 @@ pnpm add @lemondouble/lemon-auth
 |------|------|------|
 | `LEMON_AUTH_CLIENT_ID` | O | client ID |
 | `LEMON_AUTH_CLIENT_SECRET` | O | client secret |
-| `LEMON_AUTH_SECRET` | O | 쿠키 암호화 키. 32바이트 base64 (`openssl rand -base64 32`). 바꾸면 모든 앱 세션이 끝나지만, auth 서버 세션이 살아 있으면 화면 없이 다시 로그인됩니다. |
+| `LEMON_AUTH_SECRET` | O | 쿠키 암호화 키. 32바이트 base64 (`openssl rand -base64 32`). 바꾸면 모든 앱 세션이 끝나지만, auth 서버 세션이 살아 있으면 화면 없이 다시 로그인됩니다. 쿠키 안의 사용자 정보는 읽을 때마다 auth 서버 서명을 확인하므로, 이 값이 새도 사용자를 꾸며 넣을 수는 없습니다. |
 | `LEMON_AUTH_REDIRECT_PROXY_URL` | preview | 운영 배포의 콜백 주소. [preview 배포에서 로그인](#preview-배포에서-로그인) 참고 |
 | `LEMON_AUTH_PREVIEW_ORIGIN` | preview | 운영 콜백이 code를 넘겨도 되는 preview origin 패턴 |
 | `LEMON_AUTH_KEEP_ACCESS_TOKEN` | | `true`면 세션에 access token도 담아 `getAccessToken()`으로 꺼낼 수 있습니다. |

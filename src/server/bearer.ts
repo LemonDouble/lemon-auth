@@ -1,27 +1,9 @@
-import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
+import { jwtVerify } from "jose";
 import { isStringArray } from "../claims.js";
-import { clientId, getOidcConfiguration, issuerUrl } from "../config.js";
+import { clientId, issuerUrl } from "../config.js";
 import { errorCode, warnAuth } from "../log.js";
 import type { BearerToken } from "../types.js";
-
-// 키는 거의 바뀌지 않는다. 새 kid 는 캐시와 관계없이 다시 받는다.
-const JWKS_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-
-let jwks: Promise<JWTVerifyGetKey> | undefined;
-
-function getJwks(): Promise<JWTVerifyGetKey> {
-  jwks ??= getOidcConfiguration()
-    .then((configuration) => {
-      const jwksUri = configuration.serverMetadata().jwks_uri;
-      if (!jwksUri) throw new Error("[lemon-auth] discovery document has no jwks_uri");
-      return createRemoteJWKSet(new URL(jwksUri), { cacheMaxAge: JWKS_CACHE_MAX_AGE_MS });
-    })
-    .catch((error: unknown) => {
-      jwks = undefined;
-      throw error;
-    });
-  return jwks;
-}
+import { getJwks } from "./jwks.js";
 
 /**
  * `Authorization: Bearer` access token 을 RFC 9068 규칙으로 검증한다.

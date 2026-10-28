@@ -59,15 +59,19 @@ export async function createFakeOp() {
       sid: "session-1",
     };
     if (nonce) idTokenClaims.nonce = nonce;
-    const idToken = await new SignJWT(idTokenClaims)
+    const idToken = await signIdToken(user.sub, idTokenClaims);
+    return { access_token: await signAccessToken(user), token_type: "Bearer", expires_in: 1800, id_token: idToken };
+  }
+
+  async function signIdToken(sub: string, claims: Record<string, unknown>, overrides: { aud?: string; exp?: number | string } = {}) {
+    return new SignJWT(claims)
       .setProtectedHeader({ alg: "RS256", kid, typ: "JWT" })
       .setIssuer(ISSUER)
-      .setSubject(user.sub)
-      .setAudience(CLIENT_ID)
+      .setSubject(sub)
+      .setAudience(overrides.aud ?? CLIENT_ID)
       .setIssuedAt()
-      .setExpirationTime("30m")
+      .setExpirationTime(overrides.exp ?? "30m")
       .sign(privateKey);
-    return { access_token: await signAccessToken(user), token_type: "Bearer", expires_in: 1800, id_token: idToken };
   }
 
   async function handleToken(request: Request): Promise<Response> {
@@ -129,6 +133,7 @@ export async function createFakeOp() {
     fetch,
     state,
     signAccessToken,
+    signIdToken,
     /** 사용자가 OP 에서 로그인을 마친 것처럼 code 를 만들어 콜백 주소를 돌려준다. */
     async approve(authorizationUrl: URL, user: FakeUser): Promise<URL> {
       const parameters = authorizationUrl.searchParams;

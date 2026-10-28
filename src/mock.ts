@@ -1,33 +1,40 @@
-import { isLemonUser } from "./claims.js";
+import { isStringArray } from "./claims.js";
 import type { LemonUser } from "./types.js";
 
-const LEMON_AUTH_MOCK_USER_ENV = "NEXT_PUBLIC_LEMON_AUTH_MOCK_USER";
+const MOCK_ENV = "LEMON_AUTH_MOCK";
 
+/** 로컬 개발에서 auth 서버 없이 가짜 사용자로 동작한다. production 빌드에서는 무시한다. */
 export function isMockAuthEnabled(): boolean {
-  return readMockUserEnv() !== undefined;
+  return readMockEnv() !== undefined;
 }
 
 export function getMockUser(): LemonUser | null {
-  const raw = readMockUserEnv();
+  const raw = readMockEnv();
   if (raw === undefined) return null;
 
-  const user = parseJson(raw);
-  if (!isLemonUser(user)) {
-    throw new Error(
-      `${LEMON_AUTH_MOCK_USER_ENV} must be a JSON object with every LemonUser field`
-    );
+  const value = parseJson(raw);
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`[lemon-auth] ${MOCK_ENV} must be a JSON object`);
   }
-  return user;
+  const fields = value as Record<string, unknown>;
+  if (typeof fields.sub !== "string" || typeof fields.name !== "string") {
+    throw new Error(`[lemon-auth] ${MOCK_ENV} needs string "sub" and "name"`);
+  }
+  const groups = isStringArray(fields.groups) ? fields.groups : [];
+  return {
+    sub: fields.sub,
+    name: fields.name,
+    picture: typeof fields.picture === "string" ? fields.picture : null,
+    email: typeof fields.email === "string" ? fields.email : null,
+    groups,
+    isAdmin: groups.includes("admin"),
+    updatedAt: typeof fields.updatedAt === "number" ? fields.updatedAt : 0,
+  };
 }
 
-/** production 에서는 무시한다. 번들러가 process.env 를 치환하지 않으면 process 가 없을 수 있다. */
-function readMockUserEnv(): string | undefined {
-  try {
-    if (process.env.NODE_ENV === "production") return undefined;
-    return process.env.NEXT_PUBLIC_LEMON_AUTH_MOCK_USER || undefined;
-  } catch {
-    return undefined;
-  }
+function readMockEnv(): string | undefined {
+  if (process.env.NODE_ENV === "production") return undefined;
+  return process.env[MOCK_ENV] || undefined;
 }
 
 function parseJson(raw: string): unknown {

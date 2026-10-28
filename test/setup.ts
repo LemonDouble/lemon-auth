@@ -1,0 +1,8 @@
+import { CLIENT_ID, CLIENT_SECRET, ISSUER } from "./fake-op.js";
+
+export const TEST_SECRET = "ogd+6rMTb8VpIDlG1u137lTRZqJaS61vp9DmR3dKZzw=";
+
+process.env.LEMON_AUTH_ISSUER = ISSUER;
+process.env.LEMON_AUTH_CLIENT_ID = CLIENT_ID;
+process.env.LEMON_AUTH_CLIENT_SECRET = CLIENT_SECRET;
+process.env.LEMON_AUTH_SECRET = TEST_SECRET;

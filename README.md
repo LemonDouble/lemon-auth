@@ -73,7 +73,7 @@ export const config = {
 |------|--------|------|
 | `publicPaths` | `[]` | 로그인 없이 열어 둘 경로. `*`로 끝나면 prefix 매칭 |
 | `apiPaths` | `["/api/*"]` | 세션이 없으면 로그인으로 보내는 대신 `401 { "code": "UNAUTHORIZED" }`를 돌려줄 경로 |
-| `silentLoginPaths` | `[]` | 세션이 없을 때 auth 서버 세션이 있는지 화면 없이 확인할 공개 경로 (예: 로그인 버튼이 있는 첫 화면). [조용한 로그인](#조용한-로그인) 참고 |
+| `silentLoginPaths` | `[]` | 세션이 없을 때 auth 서버 세션이 있는지 화면 없이 확인할 경로 (예: 로그인 버튼이 있는 첫 화면). `publicPaths`에 넣지 않아도 공개 경로로 다룹니다. [조용한 로그인](#조용한-로그인) 참고 |
 
 - `/auth/*`, PWA와 정적 파일, `Authorization: Bearer` 요청은 그대로 통과합니다.
 - access token 만료 60초 전부터 refresh로 갱신하고, 갱신한 세션을 이번 요청의 페이지에도 넘깁니다.

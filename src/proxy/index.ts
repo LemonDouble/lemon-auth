@@ -48,12 +48,14 @@ export interface AuthProxyOptions {
   publicPaths?: string[];
   /** 로그인으로 보내는 대신 401 JSON 을 돌려줄 경로. 기본 `/api/*`. */
   apiPaths?: string[];
-  /** 세션이 없을 때 OP 세션이 있는지 화면 없이 한 번 확인할 공개 경로 (예: 로그인 버튼이 있는 첫 화면) */
+  /** 세션이 없을 때 OP 세션이 있는지 화면 없이 한 번 확인할 경로 (예: 로그인 버튼이 있는 첫 화면). 공개 경로로도 다룬다. */
   silentLoginPaths?: string[];
 }
 
 export function createAuthProxy(options: AuthProxyOptions = {}) {
-  const { publicPaths = [], apiPaths = DEFAULT_API_PATHS, silentLoginPaths = [] } = options;
+  const { apiPaths = DEFAULT_API_PATHS, silentLoginPaths = [] } = options;
+  // 보호한 경로는 세션이 없으면 /auth/login 으로 가고 OP 세션이 있으면 그때도 화면 없이 돌아오므로, 조용한 로그인은 공개 경로에서만 의미가 있다.
+  const publicPaths = [...(options.publicPaths ?? []), ...silentLoginPaths];
 
   return async function proxy(request: NextRequest): Promise<NextResponse> {
     const { pathname } = request.nextUrl;

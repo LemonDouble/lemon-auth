@@ -166,6 +166,12 @@ describe("조용한 로그인 (silentLoginPaths)", () => {
     expect(setCookieOf(response, SILENT_LOGIN_ATTEMPTED_COOKIE)).toBeUndefined();
   });
 
+  it("silentLoginPaths 는 publicPaths 에 없어도 공개 경로로 다룬다", async () => {
+    const proxy = createAuthProxy({ silentLoginPaths: ["/"] });
+    const response = await proxy(appRequest("/", { headers: NAVIGATION, cookies: { [SILENT_LOGIN_ATTEMPTED_COOKIE]: "1" } }));
+    expect(response.headers.get("location")).toBeNull();
+  });
+
   it("GET 이 아닌 요청(서버 액션)에서는 시도하지 않는다", async () => {
     const response = await visit("/", NAVIGATION, {}, "POST");
     expect(response.headers.get("location")).toBeNull();

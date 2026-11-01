@@ -23,14 +23,13 @@ export async function verifyBearerToken(request: Request): Promise<BearerToken |
       // 발급자(자택 k3s)와 검증자(Vercel)의 시계 어긋남 허용
       clockTolerance: 10,
     });
-    if (typeof payload.sub !== "string" || typeof payload.client_id !== "string") {
+    if (typeof payload.sub !== "string" || typeof payload.client_id !== "string" || !isBearerKind(payload.kind)) {
       warnAuth("bearer token claims shape mismatch");
       return null;
     }
     const groups = isStringArray(payload.groups) ? payload.groups : [];
     return {
-      // 사용자가 없는 토큰은 sub 가 client_id 다 (RFC 9068 §2.2). auth 서버가 client_id 를 정하므로 사용자 sub 와 겹치지 않는다.
-      kind: payload.sub === payload.client_id ? "service" : "user",
+      kind: payload.kind,
       sub: payload.sub,
       clientId: payload.client_id,
       scope: typeof payload.scope === "string" ? payload.scope.split(" ").filter(Boolean) : [],
@@ -43,6 +42,10 @@ export async function verifyBearerToken(request: Request): Promise<BearerToken |
     if (code !== "ERR_JWT_EXPIRED") warnAuth("bearer token verification failed", { code });
     return null;
   }
+}
+
+function isBearerKind(value: unknown): value is BearerToken["kind"] {
+  return value === "user" || value === "service";
 }
 
 function readBearerToken(authorization: string | null): string | undefined {

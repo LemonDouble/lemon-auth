@@ -6,6 +6,8 @@
 - 세션은 앱 도메인 전용 암호화 쿠키 `__Host-lemon_auth`(JWE `dir` + `A256GCM`)에 둡니다. 별도 저장소가 필요 없어 Vercel에서 그대로 동작합니다.
 - access token이 만료되기 직전에 proxy가 refresh로 갱신합니다. 로그아웃, 기기 해제, 계정 잠금, 승인 취소는 이 갱신 때(최대 30분) 반영됩니다.
 
+이 README는 설치와 설정 레퍼런스입니다. 전체 흐름과 proxy, 세션, preview 로그인의 동작 원리는 [Lemon Auth Guide](https://auth-guide.rabbitprotocol.com)(관리자 + 2단계 인증 세션만)에 있습니다.
+
 ## 설치
 
 ```bash
@@ -84,10 +86,7 @@ export const config = {
 
 ### 조용한 로그인
 
-앱마다 세션이 따로라서, 다른 앱에서 로그인했어도 이 앱의 공개 첫 화면에는 로그인 버튼이 보입니다. `silentLoginPaths`에 넣은 경로는 세션이 없으면 브라우저마다 한 번 `prompt=none`으로 auth 서버를 다녀옵니다 ([OIDC Core §3.1.2.1](https://openid.net/specs/openid-connect-core-1_0.html#AuthRequest)). auth 서버 세션이 있으면 화면 없이 로그인되고, 없으면 `login_required`를 받아 그 화면으로 돌아옵니다.
-
-- 사용자가 화면을 직접 연 요청에서만 시도합니다: `GET`, `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document` ([Fetch Metadata](https://www.w3.org/TR/fetch-metadata/)). 헤더를 보내지 않는 오래된 브라우저, iframe, 프리페치·프리렌더(`Sec-Purpose`), 봇([isbot](https://github.com/omrilotan/isbot), 브라우저와 같은 헤더를 보내는 크롤러 포함)은 시도하지 않고 화면을 그대로 보여 줍니다.
-- 시도하면 `__Host-lemon_auth_silent`(브라우저를 닫으면 사라짐)를 남겨 다시 시도하지 않습니다. 쿠키를 저장하지 못하는 브라우저는 콜백이 `/?lemon_auth_silent=skip`으로 보내 반복을 끊습니다. 리다이렉트 체인 안에서는 `Sec-Fetch-*`가 처음 값 그대로라 헤더로는 반복을 막을 수 없습니다.
+`silentLoginPaths`에 넣은 공개 경로는 세션이 없으면 브라우저마다 한 번 `prompt=none`으로 auth 서버를 다녀옵니다. 다른 앱에서 로그인해 auth 서버 세션이 있으면 화면 없이 로그인됩니다. 시도 조건과 반복 방지 장치는 [가이드: Silent 로그인](https://auth-guide.rabbitprotocol.com/nextjs/silent-login)에 있습니다.
 
 ## Server — `@lemondouble/lemon-auth/server`
 
@@ -202,11 +201,7 @@ import { loginUrl, logoutUrl } from "@lemondouble/lemon-auth/client";
 
 ## preview 배포에서 로그인
 
-preview 주소는 배포마다 바뀌어 redirect URI로 등록할 수 없습니다. 그래서 운영 배포의 `/auth/callback`이 code를 preview로 넘깁니다.
-
-1. preview가 로그인을 시작하면 redirect URI로 운영 콜백을 보내고, state에 자기 origin을 서명해 담습니다 (`LEMON_AUTH_SECRET`에서 나눈 키).
-2. 운영 콜백은 서명을 확인하고, origin이 `LEMON_AUTH_PREVIEW_ORIGIN` 패턴에 맞을 때만 query를 그대로 붙여 preview의 `/auth/callback`으로 보냅니다.
-3. preview는 운영 콜백 주소를 redirect URI로 써서 code를 교환합니다. PKCE verifier는 preview 브라우저의 임시 쿠키에 있으므로, 넘긴 code는 다른 곳에서 쓸 수 없습니다.
+preview 주소는 배포마다 바뀌어 redirect URI로 등록할 수 없으므로, 운영 배포의 `/auth/callback`이 code를 preview로 넘깁니다. 흐름은 [가이드: Preview 배포 로그인](https://auth-guide.rabbitprotocol.com/nextjs/preview)에 있습니다. Production과 Preview 환경 모두에 아래 값을 넣습니다.
 
 | 환경변수 | 예시 |
 |------|------|
@@ -240,6 +235,8 @@ auth 서버의 OIDC 전환과 함께 올립니다. 0.x는 `.lemondouble.com` 공
 - mock: `NEXT_PUBLIC_LEMON_AUTH_MOCK_USER` → `LEMON_AUTH_MOCK` (형식도 바뀜).
 
 ## 개발
+
+동작 원리를 바꾸면 [auth-guide](https://github.com/LemonDoubleHQ/auth-guide)의 해당 페이지도 함께 고칩니다. 설정과 API 레퍼런스는 이 README에 둡니다.
 
 ```bash
 pnpm install

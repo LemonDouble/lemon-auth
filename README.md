@@ -113,7 +113,7 @@ interface LemonUser {
 }
 
 interface BearerToken {
-  kind: "user" | "service"; // service: 사용자 없이 프로그램이 자기 이름으로 받은 토큰
+  kind: "user" | "service"; // 토큰의 kind claim. service: 사용자 없이 프로그램이 자기 이름으로 받은 토큰
   sub: string; // user 면 사용자, service 면 clientId 와 같음
   clientId: string; // 토큰을 받은 프로그램 (예: lemon-cli)
   scope: string[];

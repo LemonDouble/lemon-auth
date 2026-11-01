@@ -149,8 +149,13 @@ describe("verifyBearerToken", () => {
 
   it("사용자 없이 프로그램이 받은 토큰은 service 로 구분한다", async () => {
     const service = { sub: OTHER_CLIENT_ID, name: "", groups: [] };
-    const token = await fake.op!.signAccessToken(service, { clientId: OTHER_CLIENT_ID });
+    const token = await fake.op!.signAccessToken(service, { clientId: OTHER_CLIENT_ID, kind: "service" });
     expect(await verifyBearerToken(bearer(token))).toMatchObject({ kind: "service", sub: OTHER_CLIENT_ID, clientId: OTHER_CLIENT_ID, isAdmin: false });
+  });
+
+  it("kind 가 없거나 모르는 값인 토큰은 거부한다", async () => {
+    expect(await verifyBearerToken(bearer(await fake.op!.signAccessToken(user, { kind: null })))).toBeNull();
+    expect(await verifyBearerToken(bearer(await fake.op!.signAccessToken(user, { kind: "admin" })))).toBeNull();
   });
 
   it("다른 앱에 발급한 토큰, ID Token, 만료된 토큰은 거부한다", async () => {
